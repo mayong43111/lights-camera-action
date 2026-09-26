@@ -325,7 +325,12 @@ function applyPose(name) {
   star.applyAngles(poses[name]);
   poseCustomized = false;
   syncJointControls();
-  document.querySelector('#pose-state').textContent = '预设姿势';
+  document.querySelectorAll('[data-pose]').forEach((button) => {
+    const selected = button.dataset.pose === name;
+    button.classList.toggle('is-active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    if (selected) document.querySelector('#pose-state').textContent = button.querySelector('b').textContent;
+  });
 }
 
 function buildLightControls() {
@@ -396,12 +401,13 @@ function bindInterface() {
   document.querySelector('#pose-export').addEventListener('click', () => downloadJson(star.capturePose(), 'studio-pose.json'));
   document.querySelector('#pose-import').addEventListener('click', () => document.querySelector('#pose-input').click());
   document.querySelector('#pose-input').addEventListener('change', importPose);
+  bindPoseLibrary();
   document.querySelector('#pose-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-pose]');
     if (!button) return;
     rememberState();
-    setActiveButton(button);
     applyPose(button.dataset.pose);
+    document.querySelector('#pose-dialog').close();
     announce(`已切换为${button.querySelector('b').textContent}`);
   });
 
@@ -791,7 +797,6 @@ async function restoreState(state) {
   isRestoringState = true;
   currentPose = state.pose;
   applyPose(state.pose);
-  document.querySelectorAll('[data-pose]').forEach((button) => button.classList.toggle('is-active', button.dataset.pose === state.pose));
   studio.material.color.set(state.backdrop);
   document.querySelectorAll('[data-color]').forEach((button) => button.classList.toggle('is-active', button.dataset.color.toLowerCase() === state.backdrop.toLowerCase()));
   document.documentElement.style.setProperty('--frame-aspect', state.aspect);
@@ -1025,10 +1030,101 @@ function syncJointControls() {
   });
 }
 
+function bindPoseLibrary() {
+  const library = document.querySelector('#pose-library');
+  const folderSelect = document.querySelector('#pose-folder');
+  const folderNav = document.querySelector('#pose-folders');
+  const search = document.querySelector('#pose-search');
+  const clear = document.querySelector('#pose-search-clear');
+  const results = document.querySelector('#pose-controls');
+  const buttons = [...results.querySelectorAll('[data-pose]')];
+  const folders = new Map([['', buttons.length]]);
+  const dialog = document.querySelector('#pose-dialog');
+  const expand = document.querySelector('#pose-expand');
+  for (const button of buttons) {
+    folders.set(button.dataset.folder, (folders.get(button.dataset.folder) ?? 0) + 1);
+    button.setAttribute('aria-pressed', String(button.classList.contains('is-active')));
+    const check = document.createElement('i');
+    check.dataset.lucide = 'check';
+    check.className = 'pose-check';
+    check.setAttribute('aria-hidden', 'true');
+    button.append(check);
+  }
+  folderSelect.replaceChildren();
+  for (const [folder, count] of folders) {
+    const label = folder || '全部姿势';
+    folderSelect.add(new Option(`${label} (${count})`, folder));
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pose-folder-button';
+    button.dataset.folder = folder;
+    const icon = document.createElement('i');
+    icon.dataset.lucide = folder ? 'folder' : 'layers';
+    icon.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.textContent = label;
+    const total = document.createElement('small');
+    total.textContent = count;
+    button.append(icon, name, total);
+    button.addEventListener('click', () => {
+      folderSelect.value = folder;
+      updateResults();
+    });
+    folderNav.append(button);
+  }
+  function updateResults() {
+    const query = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const button of buttons) {
+      const matchesFolder = !folderSelect.value || button.dataset.folder === folderSelect.value;
+      const matchesSearch = `${button.querySelector('b').textContent} ${button.dataset.folder}`.toLocaleLowerCase().includes(query);
+      button.hidden = !matchesFolder || !matchesSearch;
+      if (!button.hidden) visible++;
+    }
+    folderNav.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.folder === folderSelect.value)));
+    document.querySelector('#pose-count').textContent = `${folderSelect.value || '全部姿势'} · ${visible} / ${folders.get(folderSelect.value)}`;
+    document.querySelector('#pose-empty').hidden = visible > 0;
+    clear.hidden = !search.value;
+    results.scrollTop = 0;
+  }
+  folderSelect.addEventListener('change', updateResults);
+  search.addEventListener('input', updateResults);
+  clear.addEventListener('click', () => {
+    search.value = '';
+    updateResults();
+    search.focus();
+  });
+  expand.addEventListener('click', () => {
+    document.querySelector('#pose-dialog-body').append(library);
+    dialog.showModal();
+    search.focus();
+  });
+  document.querySelector('#pose-dialog-close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    dialog.close();
+  });
+  dialog.addEventListener('close', () => {
+    document.querySelector('#pose-library-home').append(library);
+    expand.focus({ preventScroll: true });
+  });
+  dialog.addEventListener('click', (event) => {
+    const bounds = dialog.getBoundingClientRect();
+    if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) dialog.close();
+  });
+  updateResults();
+  window.lucide?.createIcons();
+}
+
 function onJointChange(id, edited = true) {
   if (edited) {
     poseCustomized = true;
-    document.querySelectorAll('[data-pose]').forEach((button) => button.classList.remove('is-active'));
+    document.querySelectorAll('[data-pose]').forEach((button) => {
+      button.classList.remove('is-active');
+      button.setAttribute('aria-pressed', 'false');
+    });
     document.querySelector('#pose-state').textContent = '自定义姿势';
   }
   syncJointControls();

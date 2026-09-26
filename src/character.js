@@ -3,10 +3,16 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 import { LimbIK } from './pose-ik.js';
+import { createMannequin } from './mannequin.js';
 
 export const CHARACTERS = {
   pixiv: { name: '凛 · 人形模特', url: './assets/characters/pixiv.vrm', credit: 'pixiv Inc. · VRM Public License 1.0' },
   seed: { name: 'Seed · 风格模特', url: './assets/characters/seed.vrm', credit: 'Seed-san by VirtualCast, Inc. · VRM Public License 1.0' },
+  mannequin: { name: '男性白模 · 健硕人形', url: './assets/characters/mannequin.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
+  mannequinFemale: { name: '女性白模 · 基础人形', url: './assets/characters/mannequin-female.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
+  vroidA: { name: 'VRoid A · 时装模特', url: './assets/characters/vroid-a.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
+  vroidB: { name: 'VRoid B · 潮流模特', url: './assets/characters/vroid-b.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
+  vroidC: { name: 'VRoid C · 造型模特', url: './assets/characters/vroid-c.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
 };
 
 export const JOINTS = [
@@ -46,12 +52,12 @@ export function validPose(pose) {
     && values.every((value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Math.PI));
 }
 
-export function validateVrmBytes(bytes) {
+export function validateVrmBytes(bytes, requireVrm = true) {
   if (!(bytes instanceof ArrayBuffer) || bytes.byteLength < 20 || bytes.byteLength > 40 * 1024 * 1024) throw new Error('模型必须小于 40 MB');
   const header = new DataView(bytes);
   if (header.getUint32(0, true) !== 0x46546c67 || header.getUint32(4, true) !== 2 || header.getUint32(12, true) > bytes.byteLength - 20 || header.getUint32(16, true) !== 0x4e4f534a) throw new Error('不是有效的 VRM/GLB 文件');
   const json = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, header.getUint32(12, true))));
-  if (!json.extensions?.VRMC_vrm && !json.extensions?.VRM) throw new Error('该文件不包含 VRM 人形骨骼');
+  if (requireVrm && !json.extensions?.VRMC_vrm && !json.extensions?.VRM) throw new Error('该文件不包含 VRM 人形骨骼');
   for (const resource of [...(json.buffers ?? []), ...(json.images ?? [])]) {
     if (resource.uri && !resource.uri.startsWith('data:')) throw new Error('请选择素材内嵌的独立 VRM 文件');
   }
@@ -119,9 +125,15 @@ export class Character {
       if (!response.ok) throw new Error(`模型下载失败 (${response.status})`);
       bytes = await response.arrayBuffer();
     }
-    validateVrmBytes(bytes);
+    validateVrmBytes(bytes, CHARACTERS[id].format !== 'gltf');
     const gltf = await this.loader.parseAsync(bytes, '');
-    const vrm = gltf.userData.vrm;
+    let vrm;
+    try {
+      vrm = gltf.userData.vrm ?? (CHARACTERS[id].format === 'gltf' ? createMannequin(gltf.scene) : null);
+    } catch (error) {
+      VRMUtils.deepDispose(gltf.scene);
+      throw error;
+    }
     if (!vrm) { VRMUtils.deepDispose(gltf.scene); throw new Error('无法读取 VRM 人偶'); }
     if (version !== this.version) { VRMUtils.deepDispose(vrm.scene); return false; }
     const joints = {};

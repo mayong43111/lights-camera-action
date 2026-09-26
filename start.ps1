@@ -18,7 +18,7 @@ $url = "http://127.0.0.1:$Port/"
 Write-Host "Studio running at $url"
 Write-Host 'Press Ctrl+C to stop.'
 if (-not $NoBrowser) { Start-Process $url }
-$types = @{ '.html' = 'text/html; charset=utf-8'; '.js' = 'text/javascript; charset=utf-8'; '.css' = 'text/css; charset=utf-8'; '.json' = 'application/json'; '.png' = 'image/png'; '.jpg' = 'image/jpeg'; '.vrm' = 'application/octet-stream'; '.svg' = 'image/svg+xml' }
+$types = @{ '.html' = 'text/html; charset=utf-8'; '.js' = 'text/javascript; charset=utf-8'; '.css' = 'text/css; charset=utf-8'; '.json' = 'application/json'; '.png' = 'image/png'; '.jpg' = 'image/jpeg'; '.vrm' = 'application/octet-stream'; '.glb' = 'model/gltf-binary'; '.svg' = 'image/svg+xml' }
 try {
     while ($true) {
         $client = $listener.AcceptTcpClient()

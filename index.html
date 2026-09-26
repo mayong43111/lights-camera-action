@@ -50,23 +50,39 @@
           <div class="character-grid" id="character-controls">
             <button type="button" class="character-button is-active" data-character="pixiv" aria-pressed="true"><img src="./assets/characters/pixiv.jpg" alt="pixiv 人形模特预览"><b>凛</b><span>人形模特</span></button>
             <button type="button" class="character-button" data-character="seed" aria-pressed="false"><img src="./assets/characters/seed.png" alt="Seed-san 风格模特预览"><b>Seed</b><span>风格模特</span></button>
+            <button type="button" class="character-button" data-character="mannequin" aria-pressed="false"><img src="./assets/characters/mannequin.png" alt="男性白模正面预览"><b>男性白模</b><span>健硕人形</span></button>
+            <button type="button" class="character-button" data-character="mannequinFemale" aria-pressed="false"><img src="./assets/characters/mannequin-female.png" alt="女性白模正面预览"><b>女性白模</b><span>基础人形</span></button>
           </div>
           <p class="model-credit" id="model-credit">VRM · 正在加载人偶</p>
         </section>
         <section class="tool-section">
-          <div class="section-heading"><span>01</span><h2>明星姿势</h2></div>
-          <div class="pose-grid" id="pose-controls">
-            <button class="pose-button is-active" type="button" data-pose="warrior"><i class="pose-glyph" data-lucide="accessibility"></i><b>瑜伽战士</b></button>
-            <button class="pose-button" type="button" data-pose="triangle"><i class="pose-glyph" data-lucide="triangle"></i><b>瑜伽三角</b></button>
-            <button class="pose-button" type="button" data-pose="arabesque"><i class="pose-glyph" data-lucide="feather"></i><b>芭蕾燕式</b></button>
-            <button class="pose-button" type="button" data-pose="grandJete"><i class="pose-glyph" data-lucide="move-up-right"></i><b>芭蕾大跳</b></button>
-            <button class="pose-button" type="button" data-pose="editorial"><i class="pose-glyph" data-lucide="user-round"></i><b>封面站姿</b></button>
-            <button class="pose-button" type="button" data-pose="power"><i class="pose-glyph" data-lucide="accessibility"></i><b>气场全开</b></button>
-            <button class="pose-button" type="button" data-pose="wave"><i class="pose-glyph" data-lucide="hand"></i><b>挥手亮相</b></button>
-            <button class="pose-button" type="button" data-pose="runway"><i class="pose-glyph" data-lucide="footprints"></i><b>秀场定格</b></button>
-            <button class="pose-button" type="button" data-pose="dance"><i class="pose-glyph" data-lucide="music-2"></i><b>舞台律动</b></button>
-            <button class="pose-button" type="button" data-pose="profile"><i class="pose-glyph" data-lucide="scan-face"></i><b>侧身回眸</b></button>
+          <div class="section-heading pose-heading"><span>01</span><h2>姿势库</h2><button class="icon-button" id="pose-expand" type="button" title="展开姿势库" aria-label="展开姿势库" aria-haspopup="dialog"><i data-lucide="expand"></i></button></div>
+          <div id="pose-library-home">
+            <div class="pose-library" id="pose-library">
+              <nav class="pose-folders" id="pose-folders" aria-label="姿势文件夹"></nav>
+              <div class="pose-toolbar">
+                <label class="pose-folder-select"><i data-lucide="folder"></i><select id="pose-folder" aria-label="姿势文件夹"><option value="">全部姿势</option></select></label>
+                <div class="pose-search"><i data-lucide="search"></i><input id="pose-search" type="search" placeholder="搜索姿势" aria-label="搜索当前文件夹中的姿势" autocomplete="off"><button class="icon-button" id="pose-search-clear" type="button" title="清空搜索" aria-label="清空搜索" hidden><i data-lucide="x"></i></button></div>
+              </div>
+              <div class="pose-results">
+                <div class="pose-grid" id="pose-controls" role="group" aria-label="姿势列表">
+                  <button class="pose-button is-active" type="button" data-pose="warrior" data-folder="瑜伽"><i class="pose-glyph" data-lucide="accessibility"></i><b>瑜伽战士</b></button>
+                  <button class="pose-button" type="button" data-pose="triangle" data-folder="瑜伽"><i class="pose-glyph" data-lucide="triangle"></i><b>瑜伽三角</b></button>
+                  <button class="pose-button" type="button" data-pose="arabesque" data-folder="芭蕾舞"><i class="pose-glyph" data-lucide="feather"></i><b>芭蕾燕式</b></button>
+                  <button class="pose-button" type="button" data-pose="grandJete" data-folder="芭蕾舞"><i class="pose-glyph" data-lucide="move-up-right"></i><b>芭蕾大跳</b></button>
+                  <button class="pose-button" type="button" data-pose="editorial" data-folder="服装杂志"><i class="pose-glyph" data-lucide="user-round"></i><b>封面站姿</b></button>
+                  <button class="pose-button" type="button" data-pose="power" data-folder="服装杂志"><i class="pose-glyph" data-lucide="accessibility"></i><b>气场全开</b></button>
+                  <button class="pose-button" type="button" data-pose="wave" data-folder="舞台表演"><i class="pose-glyph" data-lucide="hand"></i><b>挥手亮相</b></button>
+                  <button class="pose-button" type="button" data-pose="runway" data-folder="服装杂志"><i class="pose-glyph" data-lucide="footprints"></i><b>秀场定格</b></button>
+                  <button class="pose-button" type="button" data-pose="dance" data-folder="舞台表演"><i class="pose-glyph" data-lucide="music-2"></i><b>舞台律动</b></button>
+                  <button class="pose-button" type="button" data-pose="profile" data-folder="服装杂志"><i class="pose-glyph" data-lucide="scan-face"></i><b>侧身回眸</b></button>
+                </div>
+                <p class="pose-empty" id="pose-empty" hidden>没有匹配的姿势</p>
+              </div>
+              <output class="pose-count" id="pose-count" aria-live="polite"></output>
+            </div>
           </div>
+          <dialog class="pose-dialog" id="pose-dialog" aria-labelledby="pose-dialog-title"><header><h2 id="pose-dialog-title">姿势库</h2><button class="icon-button" id="pose-dialog-close" type="button" title="关闭姿势库" aria-label="关闭姿势库"><i data-lucide="x"></i></button></header><div id="pose-dialog-body"></div></dialog>
           <div class="asset-actions pose-actions"><span id="pose-state">预设姿势</span><button type="button" class="icon-button" id="pose-import" title="导入姿势" aria-label="导入姿势"><i data-lucide="upload"></i></button><button type="button" class="icon-button" id="pose-export" title="导出姿势" aria-label="导出姿势"><i data-lucide="download"></i></button></div>
           <input type="file" id="pose-input" accept=".json,application/json" hidden>
           <label class="range-control"><span><b>人物朝向</b><output id="rotation-output">0°</output></span><input id="star-rotation" type="range" min="-180" max="180" step="1" value="0"></label>
