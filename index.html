@@ -24,7 +24,7 @@
         <span class="slate-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <div>
           <h1>灯光、摄影、开拍</h1>
-          <p>VIRTUAL STAGE 01</p>
+          <p id="persistence-status" role="status">正在读取配置</p>
         </div>
       </div>
 
@@ -33,7 +33,9 @@
       </div>
 
       <nav class="top-actions" aria-label="项目操作">
-        <button class="icon-button" id="save-button" type="button" title="保存项目" aria-label="保存项目"><i data-lucide="save"></i></button>
+        <button class="icon-button" id="config-save" type="button" title="保存当前配置" aria-label="保存当前配置" disabled><i data-lucide="save"></i></button>
+        <button class="icon-button" id="save-button" type="button" title="导出项目配置" aria-label="导出项目配置"><i data-lucide="file-down"></i></button>
+        <button class="icon-button" id="library-open" type="button" title="相册与素材" aria-label="相册与素材"><i data-lucide="images"></i></button>
         <button class="icon-button" id="load-button" type="button" title="打开项目" aria-label="打开项目"><i data-lucide="folder-open"></i></button>
         <input type="file" id="project-input" accept=".json,application/json" hidden>
         <button class="icon-button" id="undo-button" type="button" title="撤销上一步" aria-label="撤销上一步"><i data-lucide="undo-2"></i></button>
@@ -172,6 +174,16 @@
     </main>
   </div>
 
+  <dialog id="library-dialog" class="library-dialog" aria-labelledby="library-title">
+    <header class="retouch-header"><h2 id="library-title">相册与素材</h2><div class="retouch-actions"><button class="icon-button" id="library-upload" type="button" title="导入图片" aria-label="导入图片"><i data-lucide="image-plus"></i></button><button class="icon-button" id="library-refresh" type="button" title="刷新相册" aria-label="刷新相册"><i data-lucide="refresh-cw"></i></button><button class="icon-button" id="library-close" type="button" title="关闭相册" aria-label="关闭相册"><i data-lucide="x"></i></button></div></header>
+    <div class="library-toolbar"><div class="retouch-tabs" role="tablist" aria-label="图片分类"><button type="button" role="tab" data-library-kind="photo" aria-selected="true">拍摄相册</button><button type="button" role="tab" data-library-kind="result" aria-selected="false">生成历史</button><button type="button" role="tab" data-library-kind="person" aria-selected="false">人物素材</button><button type="button" role="tab" data-library-kind="garment" aria-selected="false">服装素材</button></div><input id="library-search" type="search" placeholder="搜索已加载图片" aria-label="搜索已加载图片"></div>
+    <div class="library-workspace">
+      <section class="library-list" aria-label="图片列表"><div id="library-grid" class="library-grid"></div><p id="library-empty">暂无图片</p><button id="library-more" type="button" class="button button-light" hidden>加载更多</button></section>
+      <aside id="library-detail" class="library-detail" aria-label="图片详情" hidden><img id="library-preview" alt="所选图片预览"><h3 id="library-name"></h3><p id="library-info"></p><p id="library-prompt"></p><div class="library-actions"><button id="library-download" class="icon-button" type="button" title="下载原图" aria-label="下载原图"><i data-lucide="download"></i></button><button id="library-use" class="button button-light" type="button">用于修图</button><button id="library-retry" class="icon-button" type="button" title="重试保存" aria-label="重试保存" hidden><i data-lucide="save"></i></button><button id="library-delete" class="icon-button" type="button" title="删除图片" aria-label="删除图片"><i data-lucide="trash-2"></i></button></div></aside>
+    </div>
+    <p id="library-status" role="status" aria-live="polite"></p><input id="library-input" type="file" accept="image/png,image/jpeg" hidden>
+  </dialog>
+
   <dialog id="retouch-dialog" class="retouch-dialog" aria-labelledby="retouch-title">
     <header class="retouch-header"><div><h2 id="retouch-title">AI 修图</h2><span id="retouch-config">Azure Foundry</span></div><div class="retouch-actions"><button class="icon-button" id="retouch-config-refresh" type="button" title="重新检查配置" aria-label="重新检查配置"><i data-lucide="refresh-cw"></i></button><button class="icon-button" id="retouch-close" type="button" title="关闭修图窗口" aria-label="关闭修图窗口"><i data-lucide="x"></i></button></div></header>
     <div class="retouch-workspace">
@@ -185,15 +197,27 @@
         <fieldset id="retouch-fields">
           <label for="retouch-prompt">修图要求</label>
           <div class="retouch-prompt-field">
-            <textarea id="retouch-prompt" rows="5" maxlength="4000" placeholder="输入修图要求" required>以原图为姿势与构图依据，保留人物的身体姿态、肢体位置、拍摄角度和光照。参考人物图中的面部特征、发型、服装与整体造型，生成自然协调的新图片。保持人体比例合理、手部结构自然，使人物与场景融合；不要照搬参考图的姿势或背景。未上传参考图时，保留原图人物外观，仅优化画面质感与细节。</textarea>
+            <textarea id="retouch-prompt" rows="5" maxlength="4000" placeholder="默认"></textarea>
             <div class="retouch-prompt-actions"><button class="icon-button" id="retouch-prompt-clear" type="button" title="清空修图要求" aria-label="清空修图要求"><i data-lucide="eraser"></i></button></div>
           </div>
-          <div class="retouch-reference-heading"><label for="retouch-reference-input">参考图 <span>可选</span></label><button class="icon-button" id="retouch-reference-clear" type="button" title="移除参考图" aria-label="移除参考图" disabled><i data-lucide="trash-2"></i></button></div>
-          <button type="button" id="retouch-reference-import" class="retouch-reference"><img id="retouch-reference-image" alt="人物参考图" hidden><span id="retouch-reference-empty"><i data-lucide="image-plus"></i>添加参考图</span></button>
-          <input type="file" id="retouch-reference-input" accept="image/png,image/jpeg" hidden>
+          <div class="retouch-references">
+            <div>
+              <div class="retouch-reference-heading"><label for="retouch-reference-input">人物图 <span>可选</span></label><button class="icon-button" id="retouch-reference-clear" type="button" title="移除人物图" aria-label="移除人物图" disabled><i data-lucide="trash-2"></i></button></div>
+              <button type="button" id="retouch-reference-import" class="retouch-reference"><img id="retouch-reference-image" alt="人物参考图" hidden><span id="retouch-reference-empty"><i data-lucide="user-round-plus"></i>添加人物图</span></button>
+              <button type="button" class="retouch-library-button" id="retouch-reference-library"><i data-lucide="images"></i>选择已存人物</button>
+              <input type="file" id="retouch-reference-input" accept="image/png,image/jpeg" hidden>
+            </div>
+            <div>
+              <div class="retouch-reference-heading"><label for="retouch-garment-input">服装图 <span>可选</span></label><button class="icon-button" id="retouch-garment-clear" type="button" title="移除服装图" aria-label="移除服装图" disabled><i data-lucide="trash-2"></i></button></div>
+              <button type="button" id="retouch-garment-import" class="retouch-reference"><img id="retouch-garment-image" alt="服装参考图" hidden><span id="retouch-garment-empty"><i data-lucide="shirt"></i>添加服装图</span></button>
+              <button type="button" class="retouch-library-button" id="retouch-garment-library"><i data-lucide="images"></i>选择已存服装</button>
+              <input type="file" id="retouch-garment-input" accept="image/png,image/jpeg" hidden>
+            </div>
+          </div>
           <div class="retouch-options"><label for="retouch-quality">质量<select id="retouch-quality"><option value="low">快速</option><option value="medium" selected>标准</option><option value="high">高质量</option></select></label><label for="retouch-size">尺寸<select id="retouch-size"><option value="auto">自动</option><option value="1024x1024">1024 × 1024</option><option value="1536x1024">1536 × 1024</option><option value="1024x1536">1024 × 1536</option></select></label></div>
-          <label class="check-control retouch-consent"><input id="retouch-consent" type="checkbox" required>同意上传图片至 Azure（按量计费）</label>
+          <label class="check-control retouch-consent"><input id="retouch-consent" type="checkbox" required>同意上传原图及已选人物图、服装图至 Azure（按量计费）</label>
         </fieldset>
+        <p id="retouch-save-status" role="status">正在读取本地参数</p>
         <button class="button button-light" id="retouch-generate" type="submit" disabled><i data-lucide="wand-sparkles"></i><span>生成修图</span></button>
         <p id="retouch-status" role="status" aria-live="polite">等待选择照片</p>
       </form>

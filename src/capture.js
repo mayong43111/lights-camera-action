@@ -7,7 +7,8 @@ export function createCaptureController({ renderer, composer, camera, character,
   let restoreRecordingUi = null;
   let finishRecording = null;
 
-  function takePhoto({ download = true } = {}) {
+  function takePhoto({ archive = true, download } = {}) {
+    if (download === false) archive = false;
     if (isLoading() || !character.vrm) {
       announce('人偶正在加载，请稍后再拍摄');
       return;
@@ -39,16 +40,11 @@ export function createCaptureController({ renderer, composer, camera, character,
       character.update(0);
       composer.render();
       const dataUrl = renderer.domElement.toDataURL('image/png');
-      const name = download ? `lights-camera-take-${String(takeNumber).padStart(2, '0')}.png` : '当前场景.png';
-      if (download) {
-        const link = document.createElement('a');
-        link.download = name;
-        link.href = dataUrl;
-        link.click();
-        onPhoto(dataUrl, name);
+      const name = archive ? `lights-camera-${Date.now()}-take-${String(takeNumber).padStart(2, '0')}.png` : '当前场景.png';
+      if (archive) {
+        Promise.resolve(onPhoto(dataUrl, name)).catch(error => announce(error.message || '相册保存失败，请重试。'));
         takeNumber += 1;
         root.querySelector('#take-number').textContent = String(takeNumber).padStart(2, '0');
-        announce(`图片已导出：${width} × ${height}`);
       }
       return { image: dataUrl, name };
     } finally {

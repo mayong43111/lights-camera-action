@@ -6,6 +6,7 @@ import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studi
 import { createCaptureController } from '../src/capture.js';
 import { createPoseStore } from '../src/pose-store.js';
 import { CHARACTERS, validateVrmBytes } from '../src/character.js';
+import { createLibraryClient } from '../src/library-client.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -64,6 +65,36 @@ export async function runTests() {
     catch (error) { results.push({ name, passed: false, error: error.message }); }
   };
   const catalog = await loadPoseLibrary();
+  await test('local settings writes are serialized with revision and token', async () => {
+    const writes = [];
+    const client = createLibraryClient(async (url, options) => {
+      if (url === '/api/ai/status') return { ok: true, json: async () => ({ token: 'local-test' }) };
+      equal(options.headers['X-Studio-Token'], 'local-test');
+      if (options.method === 'GET') return { ok: true, json: async () => ({ value: null, revision: 3 }) };
+      const body = JSON.parse(options.body);
+      writes.push(body);
+      return { ok: true, json: async () => ({ revision: body.revision + 1 }) };
+    });
+    await client.settings('scene');
+    await Promise.all([client.saveSettings('scene', { version: 1 }), client.saveSettings('scene', { version: 2 })]);
+    equal(writes.map(write => write.revision), [3, 4]);
+    equal(writes.map(write => write.value.version), [1, 2]);
+  });
+  await test('local storage rejects stale configurations without advancing revision', async () => {
+    const revisions = [];
+    const client = createLibraryClient(async (url, options) => {
+      if (url === '/api/ai/status') return { ok: true, json: async () => ({ token: 'local-test' }) };
+      if (options.method === 'GET') return { ok: true, json: async () => ({ value: null, revision: 2 }) };
+      revisions.push(JSON.parse(options.body).revision);
+      return { ok: false, json: async () => ({ error: 'settings_conflict' }) };
+    });
+    for (const value of [{ version: 1 }, { version: 2 }]) {
+      let error;
+      try { await client.saveSettings('scene', value); } catch (caught) { error = caught; }
+      equal(error?.code, 'settings_conflict');
+    }
+    equal(revisions, [2, 2]);
+  });
   const registry = {
     poses: Object.fromEntries(catalog.poses.map((pose) => [pose.id, pose.joints])),
     characters: { pixiv: {} }, lightDefinitions: LIGHT_DEFINITIONS,
@@ -76,7 +107,7 @@ export async function runTests() {
   await test('all Standard poses are built in and categorized without local storage', () => {
     const clean = createPoseStore(catalog, () => ({ getItem: () => null })).catalog;
     const imported = clean.poses.filter(pose => pose.source?.pack === 'Universal Animation Library Standard');
-    equal(clean.poses.length, 61);
+    equal(clean.poses.length, 73);
     equal(clean.defaultPose, 'warrior');
     equal(imported.length, 43);
     equal(new Set(imported.map(pose => pose.source.clip)).size, 43);
@@ -85,6 +116,25 @@ export async function runTests() {
     equal(Object.values(counts), [2, 6, 7, 7, 3, 8, 6, 4]);
     assert(imported.every(pose => pose.folder.startsWith('Quaternius · ')
       && Object.keys(pose.joints).length === 51 && pose.source.license === 'CC0-1.0'), 'incomplete imported metadata');
+  });
+  await test('fashion dataset includes twelve editable grounded poses in three folders', () => {
+    const fashion = createPoseStore(catalog, () => ({ getItem: () => null })).catalog.poses
+      .filter(pose => pose.source?.pack === 'Studio Fashion Poses');
+    equal(fashion.length, 12);
+    equal([...new Set(fashion.map(pose => pose.folder))].map(folder => fashion.filter(pose => pose.folder === folder).length), [4, 4, 4]);
+    equal(fashion.map(pose => pose.id), ['fashionFront', 'fashionBack', 'fashionSide', 'fashionThreeQuarter',
+      'fashionSleeves', 'fashionWaist', 'fashionTrousers', 'fashionCuff', 'fashionStep', 'fashionWeightShift', 'fashionTurn', 'fashionWideStep']);
+    for (const pose of fashion) {
+      equal(pose.placement, { grounded: true, height: 0 });
+      assert(validPose({ format: 'studio-pose', version: 1, units: 'radians', ...pose }), pose.id);
+      const store = createPoseStore(catalog, storageFixture);
+      const updated = store.save(pose.id, { format: 'studio-pose', version: 1, units: 'radians',
+        rotation: pose.rotation, placement: pose.placement, joints: pose.joints });
+      equal(updated.joints, pose.joints);
+      equal(updated.rotation, pose.rotation);
+    }
+    equal(fashion.find(pose => pose.id === 'fashionBack').rotation, Math.PI);
+    equal(fashion.find(pose => pose.id === 'fashionSide').rotation, Math.PI / 2);
   });
   await test('save overrides one preset and preserves source catalog', () => {
     const before = JSON.stringify(catalog);
@@ -231,6 +281,19 @@ export async function runTests() {
       if (object.material) materials.add(object.material);
     });
     materials.forEach((material) => material.dispose());
+  });
+  await test('normal capture archives once without downloading', () => {
+    const { capture, state, root } = captureFixture();
+    const original = HTMLAnchorElement.prototype.click;
+    let downloads = 0;
+    HTMLAnchorElement.prototype.click = () => { downloads++; };
+    try {
+      const photo = capture.takePhoto();
+      assert(photo.name.endsWith('.png'), 'missing photo name');
+      equal(state.photos, 1);
+      equal(downloads, 0);
+      equal(root.querySelector('#take-number').textContent, '02');
+    } finally { HTMLAnchorElement.prototype.click = original; }
   });
   for (const failure of [undefined, 'photo']) {
     await test(`photo restoration ${failure ?? 'success'}`, () => {

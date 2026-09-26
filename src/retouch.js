@@ -1,3 +1,5 @@
+const defaultPrompt = '生成自然真实的服装摄影作品。以原图为姿势、身体比例、构图、拍摄角度和光照依据；使用人物图的面部特征和发型，使用服装图的款式、颜色、面料、图案与细节，让服装自然贴合原图姿态，形成合理的褶皱与阴影。不要照搬参考图的姿势、背景或服装图中模特的脸。保持手部结构自然。未上传人物图时保留原图人物；未上传服装图时沿用人物图的衣着，没有人物图则保留原图衣着。';
+
 const messages = {
   not_configured: 'Azure 未配置，请填写本地 .env 后重新检查配置。',
   invalid_image: '图片无效。仅支持 8 MB 以内、1600 万像素以内的 PNG/JPG。',
@@ -38,17 +40,20 @@ async function readImage(file) {
   });
 }
 
-export function createRetouch(capturePhoto) {
+export function createRetouch(capturePhoto, { client, library }) {
   const dialog = document.querySelector('#retouch-dialog');
   const status = document.querySelector('#retouch-status');
+  const saveStatus = document.querySelector('#retouch-save-status');
   const prompt = document.querySelector('#retouch-prompt');
+  prompt.placeholder = defaultPrompt;
   const clearPrompt = document.querySelector('#retouch-prompt-clear');
   const generate = document.querySelector('#retouch-generate');
   const consent = document.querySelector('#retouch-consent');
   const preview = document.querySelector('#retouch-preview-image');
-  const referencePreview = document.querySelector('#retouch-reference-image');
   let source = null;
-  let reference = null;
+  const references = { reference: null, garment: null };
+  const referenceIds = { referenceId: null, garmentId: null };
+  const referenceNames = { reference: '人物图', garment: '服装图' };
   let result = null;
   let sourceVersion = 0;
   let resultSourceVersion = null;
@@ -59,6 +64,65 @@ export function createRetouch(capturePhoto) {
   let loading = false;
   let checking = false;
   let config = null;
+  let preferencesReady = false;
+  let preferenceTimer = null;
+  let preferenceDirty = false;
+  let preferenceSaves = 0;
+  let preferenceVersion = 0;
+
+  async function savePreferences() {
+    clearTimeout(preferenceTimer);
+    preferenceTimer = null;
+    if (!preferencesReady) throw new Error('修图配置尚未读取，请刷新页面后重试。');
+    const version = preferenceVersion;
+    preferenceSaves++;
+    saveStatus.textContent = '正在保存参数';
+    try {
+      await client.saveSettings('retouch', { prompt: prompt.value, quality: document.querySelector('#retouch-quality').value,
+        size: document.querySelector('#retouch-size').value, ...referenceIds });
+      if (version === preferenceVersion) {
+        preferenceDirty = false;
+        saveStatus.textContent = '参数与参考图选择已保存';
+      }
+    } catch (error) {
+      saveStatus.textContent = '参数保存失败';
+      throw error;
+    } finally { preferenceSaves--; }
+  }
+
+  function schedulePreferences() {
+    if (!preferencesReady) return;
+    preferenceDirty = true;
+    preferenceVersion++;
+    saveStatus.textContent = '参数待保存';
+    clearTimeout(preferenceTimer);
+    preferenceTimer = setTimeout(() => savePreferences().catch(error => { status.textContent = error.message; }), 400);
+  }
+
+  async function restorePreferences() {
+    try {
+      const saved = await client.settings('retouch');
+      if (saved) {
+        prompt.value = saved.prompt === defaultPrompt ? '' : saved.prompt;
+        document.querySelector('#retouch-quality').value = saved.quality;
+        document.querySelector('#retouch-size').value = saved.size;
+        for (const kind of Object.keys(references)) {
+          const id = saved[`${kind}Id`];
+          if (!id) continue;
+          try {
+            references[kind] = await client.image(id);
+            referenceIds[`${kind}Id`] = id;
+          } catch (error) { if (error.code !== 'not_found') throw error; }
+        }
+      }
+      preferencesReady = true;
+      saveStatus.textContent = saved ? '已恢复本地参数' : '参数尚未保存';
+    } catch (error) {
+      saveStatus.textContent = '参数读取失败';
+      status.textContent = `修图配置读取失败：${error.message}`;
+    }
+    finally { refresh(); }
+  }
 
   function refresh() {
     const image = view === 'result' ? result : source;
@@ -73,13 +137,19 @@ export function createRetouch(capturePhoto) {
       button.setAttribute('aria-selected', String(button.dataset.retouchView === view));
       button.disabled = button.dataset.retouchView === 'result' && !result;
     });
-    referencePreview.hidden = !reference;
-    if (reference && referencePreview.getAttribute('src') !== reference) referencePreview.src = reference;
-    if (!reference) referencePreview.removeAttribute('src');
-    document.querySelector('#retouch-reference-empty').hidden = !!reference;
-    document.querySelector('#retouch-reference-import').setAttribute('aria-label', reference ? '更换参考图' : '添加参考图');
-    document.querySelector('#retouch-reference-clear').disabled = !reference || busy || loading;
-    document.querySelector('#retouch-fields').disabled = busy || loading;
+    for (const [kind, image] of Object.entries(references)) {
+      const referencePreview = document.querySelector(`#retouch-${kind}-image`);
+      referencePreview.hidden = !image;
+      if (image && referencePreview.getAttribute('src') !== image) referencePreview.src = image;
+      if (!image) referencePreview.removeAttribute('src');
+      document.querySelector(`#retouch-${kind}-empty`).hidden = !!image;
+      const upload = document.querySelector(`#retouch-${kind}-import`);
+      const label = `${image ? '更换' : '添加'}${referenceNames[kind]}`;
+      upload.setAttribute('aria-label', label);
+      upload.title = label;
+      document.querySelector(`#retouch-${kind}-clear`).disabled = !image || busy || loading;
+    }
+    document.querySelector('#retouch-fields').disabled = busy || loading || !preferencesReady;
     clearPrompt.disabled = busy || loading || !prompt.value;
     document.querySelector('#retouch-source-import').disabled = busy || loading;
     document.querySelector('#retouch-latest').disabled = !latestPhoto || busy || loading;
@@ -87,7 +157,7 @@ export function createRetouch(capturePhoto) {
     document.querySelector('#retouch-continue').disabled = !result || busy || loading;
     document.querySelector('#retouch-config-refresh').disabled = busy || checking;
     document.querySelector('#retouch-photo-name').textContent = photoName || '未选择原图';
-    generate.disabled = busy || loading || checking || !source || !prompt.value.trim() || !consent.checked || !config?.configured;
+    generate.disabled = busy || loading || checking || !preferencesReady || !source || !consent.checked || !config?.configured;
     generate.querySelector('span').textContent = busy ? '生成中…' : '生成修图';
     dialog.setAttribute('aria-busy', String(busy));
     document.querySelector('#retouch-open').classList.toggle('is-working', busy);
@@ -96,6 +166,7 @@ export function createRetouch(capturePhoto) {
   function setSource(image, name, keepResult = false) {
     sourceVersion++;
     source = image;
+    consent.checked = false;
     photoName = name;
     if (!keepResult) result = null;
     view = 'source';
@@ -157,7 +228,7 @@ export function createRetouch(capturePhoto) {
       target.click();
     });
   });
-  for (const kind of ['source', 'reference']) {
+  for (const kind of ['source', 'reference', 'garment']) {
     const input = document.querySelector(`#retouch-${kind}-input`);
     document.querySelector(`#retouch-${kind}-import`).addEventListener('click', () => input.click());
     input.addEventListener('change', async () => {
@@ -169,12 +240,16 @@ export function createRetouch(capturePhoto) {
       refresh();
       try {
         const image = await readImage(file);
+        const asset = await library.save(kind === 'source' ? 'photo' : kind === 'reference' ? 'person' : 'garment', image, file.name.slice(0, 160));
         if (kind === 'source') {
           if (sourceVersion === uploadSourceVersion) setSource(image, file.name);
         }
         else {
-          reference = image;
-          status.textContent = '参考图已就绪';
+          references[kind] = image;
+          referenceIds[`${kind}Id`] = asset.id;
+          consent.checked = false;
+          schedulePreferences();
+          status.textContent = `${referenceNames[kind]}已存入素材库`;
         }
       } catch (error) {
         status.textContent = error.message;
@@ -184,11 +259,28 @@ export function createRetouch(capturePhoto) {
       }
     });
   }
-  document.querySelector('#retouch-reference-clear').addEventListener('click', () => {
-    reference = null;
-    refresh();
-  });
-  prompt.addEventListener('input', refresh);
+  for (const kind of Object.keys(references)) {
+    document.querySelector(`#retouch-${kind}-clear`).addEventListener('click', () => {
+      references[kind] = null;
+      referenceIds[`${kind}Id`] = null;
+      consent.checked = false;
+      schedulePreferences();
+      refresh();
+    });
+    document.querySelector(`#retouch-${kind}-library`).addEventListener('click', () => {
+      library.open(kind === 'reference' ? 'person' : 'garment', async (asset, image) => {
+        if (busy || loading) throw new Error('请等待当前修图任务完成。');
+        references[kind] = image;
+        referenceIds[`${kind}Id`] = asset.id;
+        consent.checked = false;
+        schedulePreferences();
+        status.textContent = `${referenceNames[kind]}已选用`;
+        refresh();
+      });
+    });
+  }
+  prompt.addEventListener('input', () => { refresh(); schedulePreferences(); });
+  for (const id of ['retouch-quality', 'retouch-size']) document.querySelector(`#${id}`).addEventListener('change', schedulePreferences);
   clearPrompt.addEventListener('click', () => {
     prompt.value = '';
     prompt.dispatchEvent(new Event('input', { bubbles: true }));
@@ -210,10 +302,11 @@ export function createRetouch(capturePhoto) {
     status.textContent = '正在等待 Azure 生成图片…';
     refresh();
     try {
+      await savePreferences();
       const response = await fetch('/api/ai/edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Studio-Token': config.token },
-        body: JSON.stringify({ image: source, reference, prompt: prompt.value.trim(), quality: document.querySelector('#retouch-quality').value, size: document.querySelector('#retouch-size').value }),
+        body: JSON.stringify({ image: source, ...references, prompt: prompt.value.trim() || defaultPrompt, quality: document.querySelector('#retouch-quality').value, size: document.querySelector('#retouch-size').value }),
         signal: AbortSignal.timeout(255000),
       });
       const data = await response.json();
@@ -224,11 +317,20 @@ export function createRetouch(capturePhoto) {
       await decoded.decode();
       result = data.image;
       resultSourceVersion = submittedSourceVersion;
+      let saved = true;
+      if (data.storageError) {
+        library.retain('result', result, `studio-retouched-${Date.now()}.png`);
+        saved = false;
+      } else if (!data.asset) {
+        try { await library.save('result', result, `studio-retouched-${Date.now()}.png`); }
+        catch { saved = false; }
+      }
+      library.refresh();
       if (sourceVersion === submittedSourceVersion) {
         view = 'result';
-        status.textContent = `生成完成 · ${decoded.naturalWidth} × ${decoded.naturalHeight}`;
+        status.textContent = `生成完成 · ${decoded.naturalWidth} × ${decoded.naturalHeight}${saved ? ' · 已存入生成历史' : ' · 保存失败，图片暂留相册，可重试或下载；请勿刷新'}`;
       } else {
-        status.textContent = '上一张原图修图已完成，可切换查看或下载；当前场景原图保持不变。';
+        status.textContent = saved ? '上一张原图修图已完成并存入历史；当前场景原图保持不变。' : '上一张修图已完成但保存失败，请在相册重试或下载，勿刷新。';
       }
     } catch (error) {
       status.textContent = error.name === 'TimeoutError' ? messages.azure_timeout : error instanceof TypeError ? '连接中断，Azure 可能仍在处理并计费；请勿连续重复提交。' : error.message;
@@ -238,7 +340,38 @@ export function createRetouch(capturePhoto) {
     }
   });
   refresh();
+  const ready = restorePreferences();
   return {
+    ready,
+    get hasPendingChanges() { return preferenceDirty || preferenceSaves > 0 || loading || busy; },
+    async useAsset(asset, image) {
+      await ready;
+      if (busy || loading || !preferencesReady) throw new Error('请等待修图任务完成，或刷新页面恢复配置。');
+      if (asset.kind === 'person' || asset.kind === 'garment') {
+        const kind = asset.kind === 'person' ? 'reference' : 'garment';
+        references[kind] = image;
+        referenceIds[`${kind}Id`] = asset.id;
+        consent.checked = false;
+        schedulePreferences();
+        if (!source) {
+          const photo = capturePhoto();
+          if (photo) setSource(photo.image, photo.name, true);
+        }
+      } else setSource(image, asset.name, true);
+      if (!dialog.open) dialog.showModal();
+      checkConfig();
+      refresh();
+    },
+    removeAsset(id) {
+      for (const kind of Object.keys(references)) {
+        if (referenceIds[`${kind}Id`] !== id) continue;
+        referenceIds[`${kind}Id`] = null;
+        references[kind] = null;
+        consent.checked = false;
+        schedulePreferences();
+      }
+      refresh();
+    },
     setPhoto(image, name) {
       latestPhoto = { image, name };
       if (!busy && !loading) setSource(image, name);

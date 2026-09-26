@@ -17,14 +17,16 @@ from PIL import Image, UnidentifiedImageError
 import requests
 from werkzeug.exceptions import HTTPException
 from werkzeug.serving import make_server
+from storage import StorageError, StudioStore
 
 
 ROOT = Path(__file__).resolve().parent
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 Image.MAX_IMAGE_PIXELS = 16_000_000
 app = Flask(__name__, static_folder=None)
-app.config['MAX_CONTENT_LENGTH'] = 24 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 46 * 1024 * 1024
 app.config['STUDIO_ORIGIN'] = 'http://127.0.0.1:4173'
+app.config['STUDIO_DATA'] = ROOT / '.studio-data'
 TOKEN = secrets.token_urlsafe(32)
 EDIT_LOCK = threading.Lock()
 
@@ -89,7 +91,18 @@ def edit_image(payload, config):
     if payload.get('reference') is not None:
         reference, reference_type, reference_extension = decode_image(payload['reference'])
         files.append(('image[]', (f'reference.{reference_extension}', reference, reference_type)))
-        instruction += 'Image 2 is a character/appearance reference. Use its appearance as requested, while using image 1 as the composition and pose source. '
+        instruction += ('Image 2 is the person reference. Use this person\'s facial features and hairstyle, '
+                        'not their pose or background. Use their clothing only when no garment reference is supplied. ')
+    if payload.get('garment') is not None:
+        garment, garment_type, garment_extension = decode_image(payload['garment'])
+        files.append(('image[]', (f'garment.{garment_extension}', garment, garment_type)))
+        instruction += (f'Image {len(files)} is the garment reference, not the person reference. '
+                        'Dress the subject from image 1 in this garment, preserving its cut, color, fabric, '
+                        'pattern and visible details. Adapt fit, folds and shadows naturally to the pose in image 1. '
+                        'Do not copy a mannequin, wearer, face, pose or background from the garment image. '
+                        'The garment reference takes precedence over clothing in the other images. ')
+    if payload.get('reference') is None:
+        instruction += 'Preserve the identity and hairstyle of the subject in image 1. '
     if not config['configured']:
         raise EditError('not_configured', 503)
     url = (f"{config['endpoint']}/openai/deployments/{quote(config['deployment'], safe='')}"
@@ -136,7 +149,7 @@ def protect_local_server():
             raise EditError('invalid_origin', 403)
         if request.headers.get('Origin') not in (None, origin):
             raise EditError('invalid_origin', 403)
-        if request.method == 'POST' and not secrets.compare_digest(request.headers.get('X-Studio-Token', ''), TOKEN):
+        if (request.method == 'POST' or request.path.startswith('/api/data/')) and not secrets.compare_digest(request.headers.get('X-Studio-Token', ''), TOKEN):
             raise EditError('invalid_token', 403)
 
 
@@ -151,6 +164,7 @@ def response_headers(response):
 
 
 @app.errorhandler(EditError)
+@app.errorhandler(StorageError)
 def edit_error(error):
     return jsonify(error=error.code), error.status
 
@@ -173,9 +187,63 @@ def ai_edit():
     if not EDIT_LOCK.acquire(blocking=False):
         raise EditError('busy', 409)
     try:
-        return jsonify(edit_image(request.get_json(), configuration()))
+        payload = request.get_json()
+        result = edit_image(payload, configuration())
+        try:
+            content, mime, extension = decode_image(result['image'], 32 * 1024 * 1024)
+            result['asset'] = local_store().add('result', 'AI-' + secrets.token_hex(4) + '.' + extension,
+                                              content, mime, {key: payload.get(key, default) for key, default in
+                                                              (('prompt', ''), ('quality', 'medium'), ('size', 'auto'))})
+        except (StorageError, OSError):
+            result['storageError'] = 'storage_failed'
+        return jsonify(result)
     finally:
         EDIT_LOCK.release()
+
+
+def local_store():
+    return StudioStore(app.config['STUDIO_DATA'])
+
+
+@app.get('/api/data/assets')
+def list_assets():
+    try:
+        offset = int(request.args.get('offset', '0'))
+    except ValueError:
+        raise EditError('invalid_request') from None
+    return jsonify(local_store().list(request.args.get('kind'), offset))
+
+
+@app.post('/api/data/assets')
+def add_asset():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or payload.get('kind') not in ('photo', 'result', 'person', 'garment'):
+        raise EditError('invalid_request')
+    limit = 8 if payload['kind'] in ('person', 'garment') else 32
+    content, mime, _ = decode_image(payload.get('image'), limit * 1024 * 1024)
+    return jsonify(local_store().add(payload['kind'], payload.get('name'), content, mime)), 201
+
+
+@app.get('/api/data/assets/<identifier>')
+def get_asset(identifier):
+    content, mime, asset = local_store().get(identifier, request.args.get('thumbnail') == '1')
+    return send_file(io.BytesIO(content), mimetype=mime, download_name=asset['name'])
+
+
+@app.post('/api/data/assets/<identifier>/delete')
+def delete_asset(identifier):
+    local_store().delete(identifier)
+    return jsonify(deleted=True)
+
+
+@app.route('/api/data/settings/<name>', methods=['GET', 'POST'])
+def saved_settings(name):
+    if request.method == 'GET':
+        return jsonify(local_store().settings(name))
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise EditError('invalid_request')
+    return jsonify(local_store().save_settings(name, payload.get('value'), payload.get('revision')))
 
 
 @app.get('/')

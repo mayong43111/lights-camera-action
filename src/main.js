@@ -15,6 +15,8 @@ import { createStudio, createStudioLight, LIGHT_DEFINITIONS as lightDefinitions 
 import { createCaptureController } from './capture.js';
 import { createPoseStore } from './pose-store.js';
 import { createPoseSaveControls } from './pose-save.js';
+import { createLibraryClient } from './library-client.js';
+import { createLibrary } from './library.js';
 
 const poseStore = createPoseStore(await loadPoseLibrary());
 let poseLibrary = poseStore.catalog;
@@ -28,7 +30,12 @@ const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
 const viewport = document.querySelector('#viewport');
 const viewportFrame = document.querySelector('#viewport-frame');
 const statusMessage = document.querySelector('#status-message');
-const retouch = createRetouch(() => takePhoto({ download: false }));
+const libraryClient = createLibraryClient();
+const library = createLibrary({ client: libraryClient, announce,
+  onUse: (asset, image) => retouch.useAsset(asset, image),
+  onDelete: id => retouch.removeAsset(id),
+});
+const retouch = createRetouch(() => takePhoto({ archive: false }), { client: libraryClient, library });
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#eef2f4');
@@ -100,12 +107,22 @@ let backgroundLoadVersion = 0;
 let previousFrameTime = 0;
 let poseCustomized = false;
 let modelLoading = false;
+let persistenceReady = false;
+let configurationTimer = null;
+let configurationSaving = 0;
+let configurationDirty = false;
+let configurationVersion = 0;
 
 const capture = createCaptureController({
   renderer, composer, camera, character: star, floorMarks: studio.floorMarks,
   getAspect: () => currentAspect,
   isLoading: () => modelLoading,
-  onPhoto: (image, name) => retouch.setPhoto(image, name),
+  onPhoto: async (image, name) => {
+    retouch.setPhoto(image, name);
+    announce('正在保存到拍摄相册…');
+    await library.save('photo', image, name);
+    announce('已存入拍摄相册');
+  },
   onResize: () => { resizeViewport(); poseSaving.update(); },
   announce,
 });
@@ -131,6 +148,63 @@ renderer.setAnimationLoop(render);
 await switchCharacter('pixiv', false);
 document.querySelector('#loading-state').classList.add('is-hidden');
 if (poseStore.warning) announce(poseStore.warning);
+try {
+  const saved = await libraryClient.settings('scene');
+  if (saved) {
+    if (!validProject(saved, { poses, characters: CHARACTERS, lightDefinitions })) throw new Error('已存配置无效，未覆盖原始数据。');
+    if (!await restoreState(saved.state)) throw new Error('配置中的人偶加载失败，未覆盖已存配置。');
+  }
+  persistenceReady = true;
+  document.querySelector('#config-save').disabled = false;
+  document.querySelector('#persistence-status').textContent = saved ? '已恢复本地配置' : '配置尚未保存';
+} catch (error) {
+  document.querySelector('#persistence-status').textContent = '配置读取失败';
+  announce(error.message);
+}
+document.querySelector('#config-save').addEventListener('click', saveConfiguration);
+document.querySelector('.workspace').addEventListener('input', scheduleConfiguration);
+document.querySelector('.workspace').addEventListener('change', scheduleConfiguration);
+document.querySelector('.workspace').addEventListener('click', scheduleConfiguration);
+controls.addEventListener('end', scheduleConfiguration);
+window.addEventListener('beforeunload', event => {
+  if (configurationDirty || configurationSaving || retouch.hasPendingChanges || library.hasPending) {
+    event.preventDefault();
+    event.returnValue = '';
+  }
+});
+
+function scheduleConfiguration() {
+  if (!persistenceReady || isRestoringState) return;
+  configurationDirty = true;
+  configurationVersion++;
+  document.querySelector('#persistence-status').textContent = '配置待保存';
+  clearTimeout(configurationTimer);
+  configurationTimer = setTimeout(saveConfiguration, 750);
+}
+
+async function saveConfiguration() {
+  clearTimeout(configurationTimer);
+  configurationTimer = null;
+  if (!persistenceReady) return;
+  if (modelLoading || isRestoringState) {
+    configurationTimer = setTimeout(saveConfiguration, 500);
+    return;
+  }
+  const version = configurationVersion;
+  configurationSaving++;
+  document.querySelector('#persistence-status').textContent = '正在保存配置';
+  try {
+    await libraryClient.saveSettings('scene', { version: 1, state: captureState() });
+    if (version === configurationVersion) {
+      configurationDirty = false;
+      document.querySelector('#persistence-status').textContent = '配置已保存到本机';
+    }
+  } catch (error) {
+    configurationDirty = true;
+    document.querySelector('#persistence-status').textContent = '配置保存失败';
+    announce(error.message);
+  } finally { configurationSaving--; }
+}
 
 function applyPose(name) {
   currentPose = name;
@@ -450,6 +524,7 @@ function captureState() {
 
 function rememberState() {
   if (isRestoringState) return;
+  scheduleConfiguration();
   const state = JSON.stringify(captureState());
   if (history.at(-1) !== state) history.push(state);
   if (history.length > 30) history.shift();
@@ -517,6 +592,7 @@ async function restoreState(state) {
   });
   requestAnimationFrame(resizeViewport);
   isRestoringState = false;
+  scheduleConfiguration();
   return true;
 }
 
@@ -600,7 +676,7 @@ async function importBackground(event) {
 
 function saveProject() {
   downloadJson({ version: 1, state: captureState() }, `studio-${Date.now()}.json`);
-  announce('项目已保存，包含背景图片与摄影参数');
+  announce('项目配置已导出，包含背景图片与摄影参数');
 }
 
 async function loadProject(event) {
