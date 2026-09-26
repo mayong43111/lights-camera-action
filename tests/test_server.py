@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import json
 import unittest
@@ -126,6 +127,30 @@ class ImageEditTests(unittest.TestCase):
             self.assertIn(catalog['defaultPose'], identifiers)
         for path in ('/assets/poses/private.json', '/assets/poses/../../.env', '/tests/config.json', '/tests/frontend.test.js'):
             self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404)
+
+    def test_vendored_dependencies_are_complete_and_public(self):
+        vendor = server.ROOT / 'assets' / 'vendor'
+        manifest = json.loads((vendor / 'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(set(manifest), {'three', 'three-vrm', 'lucide'})
+        for folder, package in manifest.items():
+            self.assertTrue(any(name.lower().startswith('license') for name in package['files']))
+            for name, digest in package['files'].items():
+                with self.subTest(package=folder, file=name):
+                    asset = vendor / folder / name
+                    self.assertEqual(hashlib.sha256(asset.read_bytes()).hexdigest(), digest)
+                    if asset.suffix in ('.js', '.map'):
+                        with self.client.get(f'/assets/vendor/{folder}/{name}', base_url=self.origin) as response:
+                            self.assertEqual(response.status_code, 200)
+                            if asset.suffix == '.js':
+                                self.assertEqual(response.mimetype, 'text/javascript')
+        for path in ('/assets/vendor/manifest.json', '/scripts/vendor_dependencies.py',
+                     '/assets/vendor/../../.env', '/assets/vendor/../../../server.py'):
+            self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404)
+        with self.client.get('/', base_url=self.origin) as response:
+            self.assertNotIn('https://', response.text)
+            for entrypoint in ('three/build/three.module.js', 'three/examples/jsm/',
+                               'three-vrm/lib/three-vrm.module.min.js', 'lucide/dist/umd/lucide.min.js'):
+                self.assertIn(f'./assets/vendor/{entrypoint}', response.text)
 
     def test_dotenv_and_environment_precedence(self):
         with patch('server.dotenv_values', return_value={'AZURE_OPENAI_ENDPOINT': self.config['endpoint'], 'AZURE_OPENAI_API_KEY': 'file-key'}), patch.dict(server.os.environ, {}, clear=True):

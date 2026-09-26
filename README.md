@@ -25,7 +25,15 @@ python -m venv .venv
 
 启动器自动打开默认浏览器，默认地址为 http://127.0.0.1:4173/；端口占用时自动改用后续端口，以终端输出为准。按 Ctrl+C 停止。若本机策略阻止执行脚本，可直接运行 `.\.venv\Scripts\python.exe server.py`；不要更改系统安全策略。
 
-普通摄影棚功能也可部署到静态托管平台，但 AI 修图必须通过本地 Python 服务使用。服务只监听本机，不适合直接暴露到公网。普通浏览器可能限制 `file://` 模块加载，因此建议始终使用 HTTP。Three.js 和 Lucide 从固定版本 CDN 加载，当前需要联网。
+普通摄影棚功能也可部署到静态托管平台，但 AI 修图必须通过本地 Python 服务使用。服务只监听本机，不适合直接暴露到公网。普通浏览器可能限制 `file://` 模块加载，因此建议始终使用 HTTP。Three.js、three-vrm、Lucide 及其所需模块均已放在 `assets/vendor/`，人物模型、缩略图和姿势数据也随项目提供；普通摄影棚无需联网，不再请求 CDN。AI 修图仍需连接 Azure，首次安装 Python 依赖也需要联网。
+
+浏览器依赖版本固定为 Three.js 0.180.0、three-vrm 3.5.5、Lucide 0.468.0。各包许可证保留在对应目录，来源、包完整性和文件 SHA-256 记录在 [资源清单](assets/vendor/manifest.json)。需要重新下载时运行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/vendor_dependencies.py --proxy http://127.0.0.1:1080
+```
+
+此脚本只通过指定代理下载固定版本的 npm 包，验证完整性并提取使用到的模块及其依赖，不修改系统或浏览器代理设置。新增第三方模块时，在脚本的入口列表中补充模块后重跑；日常启动无需执行下载。
 
 ## AI 修图
 

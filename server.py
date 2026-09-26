@@ -187,6 +187,7 @@ def static_asset(relative='index.html'):
     allowed = relative in ('index.html', 'styles.css')
     allowed |= path == ROOT / 'assets' / 'poses' / 'library.json'
     allowed |= path.is_relative_to(ROOT / 'src') and path.suffix == '.js'
+    allowed |= path.is_relative_to(ROOT / 'assets' / 'vendor') and path.suffix in ('.js', '.map')
     allowed |= path.is_relative_to(ROOT / 'assets') and path.suffix.lower() in ('.png', '.jpg', '.jpeg', '.svg', '.vrm', '.glb')
     if not allowed or not path.is_file():
         raise EditError('not_found', 404)
