@@ -17,11 +17,14 @@ import { createPoseStore } from './pose-store.js';
 import { createPoseSaveControls } from './pose-save.js';
 import { createLibraryClient } from './library-client.js';
 import { createLibrary } from './library.js';
+import { SceneObjects } from './scene-objects.js';
+import { createSceneObjectControls } from './scene-object-controls.js';
 
 const poseStore = createPoseStore(await loadPoseLibrary());
 let poseLibrary = poseStore.catalog;
 let poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
 const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
+  if (!canEditCharacter()) return;
   rememberState();
   applyPose(pose.id);
   announce(`已切换为${pose.name}`);
@@ -87,7 +90,8 @@ composer.addPass(new OutputPass());
 const studio = createStudio();
 scene.add(studio.group);
 
-const star = new Character(scene, camera, renderer.domElement, controls, onJointChange, rememberState, renderer.capabilities.getMaxAnisotropy());
+const createCharacter = () => new Character(scene, camera, renderer.domElement, controls, onJointChange, rememberState, renderer.capabilities.getMaxAnisotropy());
+let star = createCharacter();
 
 const lights = Object.fromEntries(lightDefinitions.map((definition) => {
   const rig = createStudioLight(definition, window.innerWidth < 700 ? 1024 : 2048);
@@ -112,18 +116,25 @@ let configurationTimer = null;
 let configurationSaving = 0;
 let configurationDirty = false;
 let configurationVersion = 0;
+let objectOperation = false;
+let objectTools;
+const objects = new SceneObjects({ scene, camera, canvas: renderer.domElement, controls, createCharacter,
+  onBeforeSelect: storeActorState, onSelect: selectSceneObject, onChange: sceneObjectChanged, onStart: rememberState,
+  isBlocked: () => modelLoading || isRestoringState || capture.isRecording,
+});
+objects.register(star, { pose: currentPose, poseSaveTarget, poseCustomized });
 
 const capture = createCaptureController({
-  renderer, composer, camera, character: star, floorMarks: studio.floorMarks,
+  renderer, composer, camera, character: objects, floorMarks: studio.floorMarks,
   getAspect: () => currentAspect,
-  isLoading: () => modelLoading,
+  isLoading: () => modelLoading || objects.busy || objectOperation || isRestoringState,
   onPhoto: async (image, name) => {
     retouch.setPhoto(image, name);
     announce('正在保存到拍摄相册…');
     await library.save('photo', image, name);
     announce('已存入拍摄相册');
   },
-  onResize: () => { resizeViewport(); poseSaving.update(); },
+  onResize: () => { resizeViewport(); poseSaving.update(); objectTools?.update(); },
   announce,
 });
 const { takePhoto, toggleRecording } = capture;
@@ -131,10 +142,14 @@ const poseSaving = createPoseSaveControls({
   getEntry: () => poseLibrary.poses.find((pose) => pose.id === poseSaveTarget),
   getFolders: () => [...new Set(poseLibrary.poses.map((pose) => pose.folder))],
   capturePose: () => star.capturePose(),
-  isAvailable: () => !modelLoading && !!star.vrm && !capture.isRecording,
+  isAvailable: () => canEditCharacter() && !!star.vrm && !capture.isRecording,
   save: (snapshot) => saveLibraryPose(snapshot),
   saveAs: (details, snapshot) => saveLibraryPose(snapshot, details),
   announce,
+});
+objectTools = createSceneObjectControls({ objects, defaultActor: newActorSnapshot, onStart: rememberState,
+  onChange: sceneObjectChanged, onBusy: value => { objectOperation = value; syncObjectAvailability(); },
+  isBlocked: () => modelLoading || isRestoringState || capture.isRecording, announce,
 });
 
 applyPose(currentPose, true);
@@ -186,7 +201,7 @@ async function saveConfiguration() {
   clearTimeout(configurationTimer);
   configurationTimer = null;
   if (!persistenceReady) return;
-  if (modelLoading || isRestoringState) {
+  if (modelLoading || isRestoringState || objects.busy || objectOperation) {
     configurationTimer = setTimeout(saveConfiguration, 500);
     return;
   }
@@ -194,7 +209,7 @@ async function saveConfiguration() {
   configurationSaving++;
   document.querySelector('#persistence-status').textContent = '正在保存配置';
   try {
-    await libraryClient.saveSettings('scene', { version: 1, state: captureState() });
+    await libraryClient.saveSettings('scene', { version: 2, state: captureState() });
     if (version === configurationVersion) {
       configurationDirty = false;
       document.querySelector('#persistence-status').textContent = '配置已保存到本机';
@@ -204,6 +219,75 @@ async function saveConfiguration() {
     document.querySelector('#persistence-status').textContent = '配置保存失败';
     announce(error.message);
   } finally { configurationSaving--; }
+}
+
+function canEditCharacter() {
+  const entry = objects.active;
+  return !!entry?.character && entry.visible && !entry.locked && !modelLoading && !objects.busy && !objectOperation && !isRestoringState;
+}
+
+function storeActorState() {
+  if (isRestoringState) return;
+  const entry = objects.entries.find(item => item.character === star);
+  if (entry) Object.assign(entry, { pose: currentPose, poseSaveTarget, poseCustomized });
+}
+
+function newActorSnapshot(model) {
+  const pose = poseLibrary.poses.find(entry => entry.id === 'fashionFront') ?? poseLibrary.poses[0];
+  return { kind: 'character', model, name: `人物 ${objects.people.length + 1}`, position: [0, 0, 0], pose: pose.id,
+    poseSaveTarget: pose.id, poseCustomized: false,
+    jointPose: { format: 'studio-pose', version: 1, units: 'radians', joints: structuredClone(pose.joints), rotation: pose.rotation ?? 0, placement: { grounded: true, height: 0 } } };
+}
+
+function syncObjectAvailability() {
+  document.querySelectorAll('[data-person-tools]').forEach(section => { section.inert = !canEditCharacter(); });
+  const busy = modelLoading || objects.busy || objectOperation || isRestoringState;
+  for (const selector of ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button']) {
+    document.querySelector(selector).disabled = busy || capture.isRecording && selector !== '#record-button';
+  }
+  poseSaving.update();
+}
+
+function selectSceneObject(entry) {
+  if (entry.character) star = entry.character;
+  else if (!objects.people.some(item => item.character === star)) star = objects.people[0].character;
+  const actor = objects.entries.find(item => item.character === star);
+  const known = Object.hasOwn(poses, actor.pose);
+  currentPose = known ? actor.pose : poseLibrary.defaultPose;
+  poseSaveTarget = known ? actor.poseSaveTarget : null;
+  poseCustomized = actor.poseCustomized || !known;
+  const degrees = THREE.MathUtils.radToDeg(star.group.rotation.y);
+  document.querySelector('#star-rotation').value = degrees;
+  document.querySelector('#rotation-output').value = `${Number(degrees.toFixed(1))}°`;
+  document.querySelector('#edit-joints').checked = !!entry.character && objects.jointEditing;
+  document.querySelector('#pose-mode').value = star.editMode;
+  document.querySelectorAll('[data-character]').forEach(button => {
+    button.classList.toggle('is-active', button.dataset.character === star.id);
+    button.setAttribute('aria-pressed', String(button.dataset.character === star.id));
+  });
+  document.querySelector('#model-credit').textContent = CHARACTERS[star.id].credit;
+  poseBrowser.setSelection(entry.character && !poseCustomized ? currentPose : null);
+  syncJointControls();
+  syncPlacementControls();
+  syncObjectAvailability();
+  objectTools?.update();
+  scheduleConfiguration();
+}
+
+function sceneObjectChanged() {
+  document.querySelector('#edit-joints').checked = !!objects.active?.character && objects.jointEditing;
+  if (objects.active?.character === star) {
+    const degrees = THREE.MathUtils.radToDeg(star.group.rotation.y);
+    if (Math.abs(Number(document.querySelector('#star-rotation').value) - degrees) > 0.01) {
+      document.querySelector('#star-rotation').value = degrees;
+      document.querySelector('#rotation-output').value = `${Number(degrees.toFixed(1))}°`;
+      onJointChange(star.selected);
+    }
+  }
+  storeActorState();
+  syncObjectAvailability();
+  objectTools?.update();
+  scheduleConfiguration();
 }
 
 function applyPose(name) {
@@ -223,6 +307,8 @@ function applyPose(name) {
   syncJointControls();
   poseBrowser.setSelection(name);
   poseSaving.update();
+  storeActorState();
+  objectTools?.update();
 }
 
 function saveLibraryPose(snapshot, details = null) {
@@ -270,14 +356,14 @@ function buildLightControls() {
 function bindInterface() {
   document.querySelector('#framing-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-framing]');
-    if (button && !modelLoading) frameCharacter(button.dataset.framing);
+    if (button && !modelLoading && !objects.busy && !isRestoringState) frameCharacter(button.dataset.framing);
   });
   document.querySelector('#character-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-character]');
-    if (button && !modelLoading && !capture.isRecording) switchCharacter(button.dataset.character);
+    if (button && canEditCharacter() && !capture.isRecording) switchCharacter(button.dataset.character);
   });
   document.querySelector('#joint-select').addEventListener('change', (event) => { star.select(event.target.value); syncJointControls(); });
-  document.querySelector('#edit-joints').addEventListener('change', (event) => star.setEditing(event.target.checked));
+  document.querySelector('#edit-joints').addEventListener('change', (event) => objects.setJointEditing(event.target.checked));
   document.querySelector('#auto-ground').addEventListener('change', (event) => {
     rememberState();
     star.setGrounded(event.target.checked);
@@ -298,7 +384,7 @@ function bindInterface() {
   document.querySelector('#pose-mode').addEventListener('change', (event) => {
     star.setEditMode(event.target.value);
     document.querySelector('#edit-joints').checked = true;
-    star.setEditing(true);
+    objects.setJointEditing(true);
     syncJointControls();
     announce(event.target.value === 'ik' ? '手脚 IK 拖拽已开启' : '关节旋转已开启');
   });
@@ -394,7 +480,7 @@ function bindInterface() {
 }
 
 function frameCharacter(mode) {
-  const bounds = star.getFramingBounds(mode);
+  const bounds = objects.framingBounds(mode);
   if (!bounds) return;
   rememberState();
   controls.autoRotate = false;
@@ -487,13 +573,16 @@ function render(time) {
     camera.far = requiredFar * 2;
     camera.updateProjectionMatrix();
   }
-  star.update(delta);
+  objects.update(delta);
   bokehPass.uniforms.focus.value = camera.position.distanceTo(controls.target);
   composer.render();
 }
 
 function captureState() {
+  storeActorState();
   return {
+    objects: objects.capture(),
+    selectedObject: objects.activeId,
     pose: currentPose,
     poseSaveTarget,
     backdrop: `#${studio.material.color.getHexString()}`,
@@ -531,19 +620,35 @@ function rememberState() {
 }
 
 async function undo() {
+  if (modelLoading || objects.busy || objectOperation || isRestoringState || capture.isRecording) return;
   const state = history.pop();
   if (!state) {
     announce('没有可撤销的操作');
     return;
   }
   if (await restoreState(JSON.parse(state))) announce('已撤销上一步');
+  else history.push(state);
 }
 
 async function restoreState(state) {
-  if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) return false;
+  if (modelLoading || objects.busy || objectOperation || isRestoringState || capture.isRecording) return false;
   isRestoringState = true;
-  const knownPose = Object.hasOwn(poses, state.pose);
-  applyPose(knownPose ? state.pose : poseLibrary.defaultPose);
+  syncObjectAvailability();
+  objects.refreshEditors();
+  objectTools.update();
+  try {
+    let snapshots = state.objects;
+    let selected = state.selectedObject;
+    if (!snapshots) {
+      const knownPose = Object.hasOwn(poses, state.pose);
+      const pose = knownPose ? state.pose : poseLibrary.defaultPose;
+      const jointPose = state.jointPose ?? { format: 'studio-pose', version: 1, units: 'radians', rotation: THREE.MathUtils.degToRad(Number(state.rotation ?? 0)), joints: structuredClone(poses[pose]), placement: { grounded: true, height: 0 } };
+      if (!state.jointPose) for (const side of ['left', 'right']) jointPose.joints[`${side}UpperArm`][2] += THREE.MathUtils.degToRad(Number(state[`${side}Arm`] ?? 0));
+      selected = objects.people.find(entry => entry.character === star)?.id ?? `object-${crypto.randomUUID()}`;
+      snapshots = [{ id: selected, kind: 'character', name: '人物 1', model: state.character ?? star.id, position: [0, 0, 0], visible: true, locked: false,
+        pose, poseSaveTarget: !knownPose || state.poseSaveTarget === null ? null : pose, poseCustomized: !!state.poseCustomized || !knownPose, jointPose }];
+    }
+    await objects.restore(snapshots, selected);
   studio.material.color.set(state.backdrop);
   document.querySelectorAll('[data-color]').forEach((button) => button.classList.toggle('is-active', button.dataset.color.toLowerCase() === state.backdrop.toLowerCase()));
   document.documentElement.style.setProperty('--frame-aspect', state.aspect);
@@ -554,23 +659,6 @@ async function restoreState(state) {
   setRangeValue('#focal-length', state.focal);
   setRangeValue('#exposure', state.exposure);
   setRangeValue('#depth-of-field', state.dof);
-  setRangeValue('#star-rotation', state.rotation ?? 0);
-  if (state.jointPose) {
-    star.restorePose(state.jointPose);
-    setRangeValue('#star-rotation', THREE.MathUtils.radToDeg(state.jointPose.rotation));
-  } else {
-    star.setGrounded(true);
-    for (const side of ['left', 'right']) {
-      const angles = [...star.poseAngles[`${side}UpperArm`]];
-      angles[2] += THREE.MathUtils.degToRad(Number(state[`${side}Arm`] ?? 0));
-      star.setJoint(`${side}UpperArm`, angles);
-    }
-  }
-  poseSaveTarget = !knownPose || state.poseSaveTarget === null ? null : state.pose;
-  poseSaving.update();
-  if (state.poseCustomized || !knownPose) onJointChange(star.selected);
-  else syncJointControls();
-  syncPlacementControls();
   document.querySelector('#auto-orbit').checked = state.autoOrbit ?? false;
   controls.autoRotate = state.autoOrbit ?? false;
   controls.autoRotateSpeed = 0.6;
@@ -591,9 +679,17 @@ async function restoreState(state) {
     article.querySelector('.light-intensity').dispatchEvent(new Event('input', { bubbles: true }));
   });
   requestAnimationFrame(resizeViewport);
-  isRestoringState = false;
-  scheduleConfiguration();
   return true;
+  } catch (error) {
+    announce(`场景恢复失败：${error.message}`);
+    return false;
+  } finally {
+    isRestoringState = false;
+    objects.refreshEditors();
+    syncObjectAvailability();
+    objectTools.update();
+    scheduleConfiguration();
+  }
 }
 
 function setRangeValue(selector, value) {
@@ -675,7 +771,7 @@ async function importBackground(event) {
 }
 
 function saveProject() {
-  downloadJson({ version: 1, state: captureState() }, `studio-${Date.now()}.json`);
+  downloadJson({ version: 2, state: captureState() }, `studio-${Date.now()}.json`);
   announce('项目配置已导出，包含背景图片与摄影参数');
 }
 
@@ -756,6 +852,7 @@ function onJointChange(id, edited = true) {
     if (entry) document.querySelector('#pose-state').textContent = `${entry.name} · 未保存`;
   }
   syncJointControls();
+  if (edited) { storeActorState(); scheduleConfiguration(); }
 }
 
 async function switchCharacter(id, recordHistory = true) {
@@ -763,6 +860,9 @@ async function switchCharacter(id, recordHistory = true) {
   if (star.vrm && star.id === id) return true;
   if (recordHistory) rememberState();
   modelLoading = true;
+  objects.refreshEditors();
+  objectTools.update();
+  syncObjectAvailability();
   document.querySelector('#character-controls').setAttribute('aria-busy', 'true');
   document.querySelector('#model-credit').textContent = '正在加载人偶…';
   const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button', '#pose-save', '#pose-save-as'];
@@ -787,6 +887,9 @@ async function switchCharacter(id, recordHistory = true) {
     document.querySelector('#character-controls').setAttribute('aria-busy', 'false');
     actions.forEach((selector) => { document.querySelector(selector).disabled = false; });
     poseSaving.update();
+    objects.refreshEditors();
+    syncObjectAvailability();
+    objectTools.update();
   }
 }
 
@@ -804,6 +907,7 @@ async function importPose(event) {
   const file = event.target.files[0];
   event.target.value = '';
   if (!file) return;
+  if (!canEditCharacter()) return;
   try {
     if (file.size > 128 * 1024) throw new Error('姿势文件超过 128 KB');
     const pose = JSON.parse(await file.text());

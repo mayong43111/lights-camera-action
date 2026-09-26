@@ -46,6 +46,7 @@ export class Character {
     this.height = 0;
     this.ikDrag = null;
     this.canvas = canvas;
+    this.listeners = new AbortController();
     this.orbit = orbit;
     this.selected = 'head';
     this.onChange = onChange;
@@ -72,7 +73,7 @@ export class Character {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let pointerStart;
-    canvas.addEventListener('pointerdown', (event) => { pointerStart = [event.clientX, event.clientY]; });
+    canvas.addEventListener('pointerdown', (event) => { pointerStart = [event.clientX, event.clientY]; }, { signal: this.listeners.signal });
     canvas.addEventListener('pointerup', (event) => {
       if (!this.editing || this.gizmo.axis || !pointerStart || Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 5) return;
       const rect = canvas.getBoundingClientRect();
@@ -80,7 +81,7 @@ export class Character {
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(this.markers.children, false)[0];
       if (hit) { this.select(hit.object.userData.joint); onChange(this.selected, false); }
-    });
+    }, { signal: this.listeners.signal });
     this.bindIKPointer(canvas, camera, onStart);
   }
 
@@ -291,22 +292,22 @@ export class Character {
       canvas.setPointerCapture(event.pointerId);
       canvas.style.cursor = 'grabbing';
       this.onChange(this.selected, false);
-    }, true);
+    }, { capture: true, signal: this.listeners.signal });
     canvas.addEventListener('pointermove', (event) => {
       if (!this.ikDrag || event.pointerId !== this.ikDrag.pointerId) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       const point = pointOnPlane(event, this.ikDrag.plane);
       if (point) this.solveIK(this.selected, point.add(this.ikDrag.offset));
-    }, true);
+    }, { capture: true, signal: this.listeners.signal });
     const finish = (event) => {
       if (!this.ikDrag || event.pointerId !== this.ikDrag.pointerId) return;
       event.stopImmediatePropagation();
       this.finishIKDrag();
     };
-    canvas.addEventListener('pointerup', finish, true);
-    canvas.addEventListener('pointercancel', finish, true);
-    canvas.addEventListener('lostpointercapture', finish);
+    canvas.addEventListener('pointerup', finish, { capture: true, signal: this.listeners.signal });
+    canvas.addEventListener('pointercancel', finish, { capture: true, signal: this.listeners.signal });
+    canvas.addEventListener('lostpointercapture', finish, { signal: this.listeners.signal });
   }
 
   finishIKDrag() {
@@ -317,6 +318,23 @@ export class Character {
     this.orbit.autoRotate = drag.autoRotate;
     this.canvas.style.cursor = '';
     if (this.canvas.hasPointerCapture(drag.pointerId)) this.canvas.releasePointerCapture(drag.pointerId);
+  }
+
+  dispose() {
+    this.version++;
+    this.setEditing(false);
+    this.listeners.abort();
+    this.gizmo.dispose();
+    this.helper.removeFromParent();
+    this.ik?.dispose();
+    for (const marker of this.markers.children) { marker.geometry.dispose(); marker.material.dispose(); }
+    this.markers.removeFromParent();
+    if (this.vrm) {
+      for (const material of this.vrm.materials ?? []) material.dispose();
+      VRMUtils.deepDispose(this.vrm.scene);
+      this.vrm = null;
+    }
+    this.group.removeFromParent();
   }
 
   capturePose() {

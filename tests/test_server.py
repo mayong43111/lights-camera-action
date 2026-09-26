@@ -167,6 +167,13 @@ class ImageEditTests(unittest.TestCase):
             self.assertEqual(self.data_request('settings/' + name, {'value': value, 'revision': 0}).status_code, 409)
         self.assertEqual(self.data_request('settings/retouch', {'value': {'token': 'secret'}, 'revision': 1}).status_code, 400)
 
+    def test_multi_object_settings_version_roundtrip(self):
+        value = {'version': 2, 'state': {'objects': [{'id': 'actor-a', 'kind': 'character'}], 'selectedObject': 'actor-a'}}
+        response = self.data_request('settings/scene', {'value': value, 'revision': 0})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.data_request('settings/scene').json['value'], value)
+        self.assertEqual(self.data_request('settings/scene', {'value': {**value, 'version': 3}, 'revision': 1}).status_code, 400)
+
     def test_generated_history_survives_without_browser_and_storage_failure_keeps_image(self):
         with patch('server.configuration', return_value=self.config), patch('server.requests.post', return_value=self.azure_response()):
             response = self.post()

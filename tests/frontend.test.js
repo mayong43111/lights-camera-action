@@ -1,5 +1,5 @@
 import { JOINTS, validPose } from '../src/pose-schema.js';
-import { createDefaultState, validProject } from '../src/project-schema.js';
+import { createDefaultState, validProject, validSceneObjects } from '../src/project-schema.js';
 import { loadPoseLibrary, validatePoseLibrary } from '../src/pose-library.js';
 import { createPoseBrowser } from '../src/pose-browser.js';
 import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studio-scene.js';
@@ -7,6 +7,8 @@ import { createCaptureController } from '../src/capture.js';
 import { createPoseStore } from '../src/pose-store.js';
 import { CHARACTERS, validateVrmBytes } from '../src/character.js';
 import { createLibraryClient } from '../src/library-client.js';
+import * as THREE from 'three';
+import { SceneObjects, createProp } from '../src/scene-objects.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -58,6 +60,28 @@ function captureFixture(failure) {
   return { capture, state, root, character, camera, floorMarks };
 }
 
+function sceneObjectsFixture(jointPose) {
+  const scene = new THREE.Scene();
+  const counts = { loads: 0, disposed: 0, fail: false };
+  const createCharacter = () => {
+    const group = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 3, 1), new THREE.MeshBasicMaterial());
+    mesh.position.y = 1.5;
+    group.add(mesh);
+    scene.add(group);
+    return { group, id: 'mannequin', vrm: {}, editing: false, pose: structuredClone(jointPose),
+      async load(id) { counts.loads++; if (counts.fail) throw new Error('Expected model failure'); this.id = id; return true; },
+      restorePose(pose) { this.pose = structuredClone(pose); group.rotation.y = pose.rotation; },
+      capturePose() { return structuredClone(this.pose); }, setEditing(value) { this.editing = value; }, update() {},
+      getFramingBounds() { return new THREE.Box3().setFromObject(group); },
+      dispose() { counts.disposed++; mesh.geometry.dispose(); mesh.material.dispose(); group.removeFromParent(); },
+    };
+  };
+  const objects = new SceneObjects({ scene, camera: new THREE.PerspectiveCamera(), canvas: document.createElement('canvas'), controls: { enabled: true }, createCharacter });
+  objects.register(createCharacter(), { pose: 'neutral', poseSaveTarget: 'neutral', poseCustomized: false });
+  return { objects, scene, counts };
+}
+
 export async function runTests() {
   const results = [];
   const test = async (name, run) => {
@@ -65,6 +89,83 @@ export async function runTests() {
     catch (error) { results.push({ name, passed: false, error: error.message }); }
   };
   const catalog = await loadPoseLibrary();
+  const scenePose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0, joints: catalog.poses[0].joints };
+  await test('scene objects keep independent poses, stable IDs and capture helper state', async () => {
+    const { objects, counts } = sceneObjectsFixture(scenePose);
+    try {
+      const first = objects.active;
+      const second = await objects.add({ ...objects.snapshot(first), position: [2, 0, 0] });
+      second.group.rotation.set(0.3, 0.5, 0.2);
+      objects.gizmo.dispatchEvent({ type: 'objectChange' });
+      equal([second.group.rotation.x, second.group.rotation.z], [0, 0]);
+      second.character.pose.joints.head[0] = 0.5;
+      assert(first.character.pose.joints.head[0] !== 0.5, 'Actors share pose state');
+      objects.setJointEditing(true);
+      assert(second.character.editing && !first.character.editing, 'Inactive actor remains editable');
+      objects.setEditing(false);
+      assert(!objects.box.visible && !objects.gizmo.enabled && objects.people.every(entry => !entry.character.editing), 'Capture leaks editor helpers');
+      objects.setEditing(true);
+      assert(second.character.editing, 'Editing not restored');
+      const prop = await objects.add({ kind: 'prop', model: 'chair', name: '椅子', position: [4, 0, 0], rotation: [0, 0, 0], scale: 1 });
+      const saved = objects.capture();
+      objects.removeSelected();
+      await objects.restore(saved, prop.id);
+      equal(objects.capture(), saved);
+      equal(counts.loads, 1);
+      assert(objects.framingBounds('all').max.x > 4, 'Group framing excludes props');
+      assert(objects.active.id === prop.id && objects.gizmo.enabled, 'Prop selection not restored');
+      for (const model of ['chair', 'stool', 'plinth']) {
+        const group = createProp(model);
+        const bounds = new THREE.Box3().setFromObject(group);
+        assert(Math.abs(bounds.min.y) < 0.001 && bounds.max.y > 0.9, 'Prop origin or dimensions incorrect');
+        group.traverse(object => object.geometry?.dispose());
+        group.userData.materials.forEach(material => material.dispose());
+      }
+    } finally { objects.dispose(); }
+    equal(counts.disposed, 2);
+  });
+  await test('failed scene restoration keeps the existing scene and disposes staged actors', async () => {
+    const { objects, scene, counts } = sceneObjectsFixture(scenePose);
+    try {
+      const before = objects.capture();
+      const childCount = scene.children.length;
+      const invalid = structuredClone(before);
+      invalid[0].position[0] = 5;
+      invalid.push({ ...structuredClone(before[0]), id: 'new-actor', model: 'seed' });
+      counts.fail = true;
+      let rejected = false;
+      try { await objects.restore(invalid, 'new-actor'); } catch { rejected = true; }
+      assert(rejected, 'Failed model load accepted');
+      equal(objects.capture(), before);
+      equal(scene.children.length, childCount);
+      equal(counts.disposed, 1);
+      assert(!objects.busy, 'Restore failure leaves scene busy');
+      let lastActorRejected = false;
+      try { objects.removeSelected(); } catch { lastActorRejected = true; }
+      assert(lastActorRejected && objects.people.length === 1, 'Last actor removed');
+    } finally { objects.dispose(); }
+  });
+  await test('multi-object project validates independent actors and props with legacy compatibility', () => {
+    const pose = catalog.poses[0];
+    const jointPose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0, joints: pose.joints };
+    const actor = { id: 'actor-a', kind: 'character', name: '人物 A', model: 'mannequin', position: [-1, 0, 0], visible: true, locked: false,
+      jointPose, pose: pose.id, poseSaveTarget: pose.id, poseCustomized: false };
+    const objects = [actor, { ...structuredClone(actor), id: 'actor-b', name: '人物 B', position: [1, 0, 0] },
+      { id: 'chair-a', kind: 'prop', name: '椅子', model: 'chair', position: [0, 0, 0], rotation: [0, 0, 0], scale: 1, visible: true, locked: false }];
+    const state = createDefaultState(pose.id, LIGHT_DEFINITIONS);
+    const registry = { poses: { [pose.id]: pose.joints }, characters: CHARACTERS, lightDefinitions: LIGHT_DEFINITIONS };
+    assert(validProject({ version: 1, state }, registry), 'Legacy scene rejected');
+    assert(validProject({ version: 2, state: { ...state, objects, selectedObject: 'actor-b' } }, registry), 'Multi-object scene rejected');
+    assert(!validSceneObjects([...objects, actor], 'actor-a', CHARACTERS), 'Duplicate IDs accepted');
+    assert(!validSceneObjects(objects, 'missing', CHARACTERS), 'Missing selection accepted');
+    assert(!validSceneObjects(objects.slice(2), 'chair-a', CHARACTERS), 'Scene without actor accepted');
+    const invalid = structuredClone(objects);
+    invalid[1].position[0] = Infinity;
+    assert(!validSceneObjects(invalid, 'actor-a', CHARACTERS), 'Invalid position accepted');
+    invalid[1].position = [0, 0, 0];
+    invalid[2].model = '__proto__';
+    assert(!validSceneObjects(invalid, 'actor-a', CHARACTERS), 'Unknown prop accepted');
+  });
   await test('local settings writes are serialized with revision and token', async () => {
     const writes = [];
     const client = createLibraryClient(async (url, options) => {

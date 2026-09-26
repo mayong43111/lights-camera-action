@@ -48,7 +48,23 @@
 
     <main class="workspace">
       <aside class="panel panel-left" aria-label="创作工具">
-        <section class="tool-section">
+        <section class="tool-section scene-object-section">
+          <div class="section-heading"><span>SCENE</span><h2>场景对象</h2><small id="scene-object-count"></small></div>
+          <fieldset id="scene-object-fields">
+            <div class="scene-object-add"><select id="scene-object-type" aria-label="添加对象类型"></select><button class="icon-button" id="scene-object-add" type="button" title="添加到场景" aria-label="添加到场景"><i data-lucide="plus"></i></button></div>
+            <div id="scene-object-list" role="group" aria-label="场景对象列表"></div>
+            <div class="scene-object-actions"><input id="scene-object-name" aria-label="对象名称" maxlength="80"><button class="icon-button" id="scene-object-copy" type="button" title="复制选中对象" aria-label="复制选中对象"><i data-lucide="copy"></i></button><button class="icon-button" id="scene-object-delete" type="button" title="删除选中对象" aria-label="删除选中对象"><i data-lucide="trash-2"></i></button></div>
+            <div class="scene-object-flags"><label><input id="scene-object-visible" type="checkbox" checked>显示</label><label><input id="scene-object-locked" type="checkbox">锁定</label><button class="icon-button" data-object-mode="translate" type="button" title="移动对象" aria-label="移动对象" aria-pressed="true"><i data-lucide="move"></i></button><button class="icon-button" data-object-mode="rotate" type="button" title="旋转对象" aria-label="旋转对象" aria-pressed="false"><i data-lucide="rotate-3d"></i></button></div>
+            <span class="object-transform-label">位置</span><div class="object-transform">
+              <label>X<input id="object-position-x" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 X"></label><label>Y<input id="object-position-y" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Y"></label><label>Z<input id="object-position-z" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Z"></label>
+            </div>
+            <span class="object-transform-label">旋转角度</span><div class="object-transform">
+              <label>X<input id="object-rotation-x" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 X"></label><label>Y<input id="object-rotation-y" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Y"></label><label>Z<input id="object-rotation-z" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Z"></label>
+            </div>
+            <label class="object-scale">道具缩放<input id="scene-object-scale" type="number" min="0.1" max="5" step="0.1" value="1"></label>
+          </fieldset>
+        </section>
+        <section class="tool-section" data-person-tools>
           <div class="section-heading"><span>CAST</span><h2>选择人偶</h2></div>
           <div class="character-grid" id="character-controls">
             <button type="button" class="character-button is-active" data-character="pixiv" aria-pressed="true"><img src="./assets/characters/pixiv.jpg" alt="pixiv 人形模特预览"><b>凛</b><span>人形模特</span></button>
@@ -59,7 +75,7 @@
           </div>
           <p class="model-credit" id="model-credit">VRM · 正在加载人偶</p>
         </section>
-        <section class="tool-section">
+        <section class="tool-section" data-person-tools>
           <div class="section-heading pose-heading"><span>01</span><h2>姿势库</h2><button class="icon-button" id="pose-expand" type="button" title="展开姿势库" aria-label="展开姿势库" aria-haspopup="dialog"><i data-lucide="expand"></i></button></div>
           <div id="pose-library-home">
             <div class="pose-library" id="pose-library">
@@ -83,7 +99,7 @@
           <label class="check-control"><input id="auto-ground" type="checkbox" checked>自动贴地</label>
           <div class="joint-axis"><label for="character-height">人物高度 Y</label><input id="character-height-value" type="number" min="-1000" max="1000" step="0.05" value="0" aria-label="人物高度" disabled><input id="character-height" type="range" min="-10" max="10" step="0.05" value="0" disabled></div>
         </section>
-        <section class="tool-section joint-section">
+        <section class="tool-section joint-section" data-person-tools>
           <div class="section-heading"><span>RIG</span><h2>手动摆姿</h2></div>
           <label class="select-label" for="pose-mode">鼠标操作</label>
           <select id="pose-mode"><option value="fk">旋转关节 · FK</option><option value="ik">IK 拖拽 + 关节精调</option></select>
@@ -148,6 +164,7 @@
             <button class="button" type="button" data-framing="half" title="半身取景"><i data-lucide="user"></i>半身</button>
             <button class="button" type="button" data-framing="face" title="面部特写"><i data-lucide="scan-face"></i>面部</button>
             <button class="button" type="button" data-framing="low" title="低机位仰拍"><i data-lucide="move-up-right"></i>仰拍</button>
+            <button class="button" type="button" data-framing="all" title="全部可见对象入镜"><i data-lucide="scan"></i>全部入镜</button>
           </div>
           <label class="range-control">
             <span><b>焦距</b><output id="focal-output">50 mm</output></span>

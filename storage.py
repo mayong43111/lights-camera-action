@@ -102,7 +102,7 @@ class StudioStore:
         if name not in ('scene', 'retouch') or not isinstance(value, dict) or type(revision) is not int or revision < 0:
             raise StorageError('invalid_request', 400)
         if name == 'scene':
-            valid = set(value) == {'version', 'state'} and value['version'] == 1 and isinstance(value['state'], dict)
+            valid = set(value) == {'version', 'state'} and type(value['version']) is int and value['version'] in (1, 2) and isinstance(value['state'], dict)
         else:
             valid = (set(value) == {'prompt', 'quality', 'size', 'referenceId', 'garmentId'}
                      and isinstance(value['prompt'], str) and len(value['prompt']) <= 4000
