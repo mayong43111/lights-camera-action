@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="灯光、摄影、开拍 - 自由布光、摆姿和拍摄的 3D 虚拟摄影棚。">
+  <title>灯光、摄影、开拍</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+        "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3.5.5/lib/three-vrm.module.min.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <span class="slate-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div>
+          <h1>灯光、摄影、开拍</h1>
+          <p>VIRTUAL STAGE 01</p>
+        </div>
+      </div>
+
+      <div class="take-display" aria-label="当前场次">
+        <span>SCENE</span><strong>01</strong><span>TAKE</span><strong id="take-number">01</strong>
+      </div>
+
+      <nav class="top-actions" aria-label="项目操作">
+        <button class="icon-button" id="save-button" type="button" title="保存项目" aria-label="保存项目"><i data-lucide="save"></i></button>
+        <button class="icon-button" id="load-button" type="button" title="打开项目" aria-label="打开项目"><i data-lucide="folder-open"></i></button>
+        <input type="file" id="project-input" accept=".json,application/json" hidden>
+        <button class="icon-button" id="undo-button" type="button" title="撤销上一步" aria-label="撤销上一步"><i data-lucide="undo-2"></i></button>
+        <button class="icon-button" id="reset-button" type="button" title="重置摄影棚" aria-label="重置摄影棚"><i data-lucide="rotate-ccw"></i></button>
+        <button class="button button-light" id="photo-button" type="button" title="拍摄图片" aria-label="拍摄图片"><i data-lucide="camera"></i><span class="action-label">拍摄图片</span></button>
+        <button class="button button-record" id="record-button" type="button" title="录制视频" aria-label="录制视频"><i data-lucide="video"></i><span class="action-label" id="record-label">录制视频</span></button>
+      </nav>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel panel-left" aria-label="创作工具">
+        <section class="tool-section">
+          <div class="section-heading"><span>CAST</span><h2>选择人偶</h2></div>
+          <div class="character-grid" id="character-controls">
+            <button type="button" class="character-button is-active" data-character="pixiv" aria-pressed="true"><img src="./assets/characters/pixiv.jpg" alt="pixiv 人形模特预览"><b>凛</b><span>人形模特</span></button>
+            <button type="button" class="character-button" data-character="seed" aria-pressed="false"><img src="./assets/characters/seed.png" alt="Seed-san 风格模特预览"><b>Seed</b><span>风格模特</span></button>
+          </div>
+          <p class="model-credit" id="model-credit">VRM · 正在加载人偶</p>
+        </section>
+        <section class="tool-section">
+          <div class="section-heading"><span>01</span><h2>明星姿势</h2></div>
+          <div class="pose-grid" id="pose-controls">
+            <button class="pose-button is-active" type="button" data-pose="warrior"><i class="pose-glyph" data-lucide="accessibility"></i><b>瑜伽战士</b></button>
+            <button class="pose-button" type="button" data-pose="triangle"><i class="pose-glyph" data-lucide="triangle"></i><b>瑜伽三角</b></button>
+            <button class="pose-button" type="button" data-pose="arabesque"><i class="pose-glyph" data-lucide="feather"></i><b>芭蕾燕式</b></button>
+            <button class="pose-button" type="button" data-pose="grandJete"><i class="pose-glyph" data-lucide="move-up-right"></i><b>芭蕾大跳</b></button>
+            <button class="pose-button" type="button" data-pose="editorial"><i class="pose-glyph" data-lucide="user-round"></i><b>封面站姿</b></button>
+            <button class="pose-button" type="button" data-pose="power"><i class="pose-glyph" data-lucide="accessibility"></i><b>气场全开</b></button>
+            <button class="pose-button" type="button" data-pose="wave"><i class="pose-glyph" data-lucide="hand"></i><b>挥手亮相</b></button>
+            <button class="pose-button" type="button" data-pose="runway"><i class="pose-glyph" data-lucide="footprints"></i><b>秀场定格</b></button>
+            <button class="pose-button" type="button" data-pose="dance"><i class="pose-glyph" data-lucide="music-2"></i><b>舞台律动</b></button>
+            <button class="pose-button" type="button" data-pose="profile"><i class="pose-glyph" data-lucide="scan-face"></i><b>侧身回眸</b></button>
+          </div>
+          <div class="asset-actions pose-actions"><span id="pose-state">预设姿势</span><button type="button" class="icon-button" id="pose-import" title="导入姿势" aria-label="导入姿势"><i data-lucide="upload"></i></button><button type="button" class="icon-button" id="pose-export" title="导出姿势" aria-label="导出姿势"><i data-lucide="download"></i></button></div>
+          <input type="file" id="pose-input" accept=".json,application/json" hidden>
+          <label class="range-control"><span><b>人物朝向</b><output id="rotation-output">0°</output></span><input id="star-rotation" type="range" min="-180" max="180" step="1" value="0"></label>
+          <label class="check-control"><input id="auto-ground" type="checkbox" checked>自动贴地</label>
+          <div class="joint-axis"><label for="character-height">人物高度 Y</label><input id="character-height-value" type="number" min="-1000" max="1000" step="0.05" value="0" aria-label="人物高度" disabled><input id="character-height" type="range" min="-10" max="10" step="0.05" value="0" disabled></div>
+        </section>
+        <section class="tool-section joint-section">
+          <div class="section-heading"><span>RIG</span><h2>手动摆姿</h2></div>
+          <label class="select-label" for="pose-mode">鼠标操作</label>
+          <select id="pose-mode"><option value="fk">旋转关节 · FK</option><option value="ik">IK 拖拽 + 关节精调</option></select>
+          <label class="select-label" for="joint-select">当前关节</label><select id="joint-select"></select>
+          <label class="check-control"><input id="edit-joints" type="checkbox">显示姿势控制点</label>
+          <div class="joint-axis"><label for="joint-x">X · 俯仰</label><input id="joint-x-value" type="number" min="-180" max="180" step="1" value="0" aria-label="X 俯仰角度"><input id="joint-x" type="range" min="-180" max="180" step="1" value="0"></div>
+          <div class="joint-axis"><label for="joint-y">Y · 扭转</label><input id="joint-y-value" type="number" min="-180" max="180" step="1" value="0" aria-label="Y 扭转角度"><input id="joint-y" type="range" min="-180" max="180" step="1" value="0"></div>
+          <div class="joint-axis"><label for="joint-z">Z · 侧摆</label><input id="joint-z-value" type="number" min="-180" max="180" step="1" value="0" aria-label="Z 侧摆角度"><input id="joint-z" type="range" min="-180" max="180" step="1" value="0"></div>
+          <button type="button" class="button full-width" id="joint-reset"><i data-lucide="rotate-ccw"></i>重置当前关节</button>
+        </section>
+
+        <section class="tool-section">
+          <div class="section-heading"><span>02</span><h2>背景色</h2></div>
+          <div class="swatch-grid" id="backdrop-controls" aria-label="选择背景色">
+            <button class="swatch is-active" type="button" data-color="#edf4f6" style="--swatch:#edf4f6" aria-label="柔白背景"></button>
+            <button class="swatch" type="button" data-color="#7a7b78" style="--swatch:#7a7b78" aria-label="中灰背景"></button>
+            <button class="swatch" type="button" data-color="#151515" style="--swatch:#151515" aria-label="黑色背景"></button>
+            <button class="swatch" type="button" data-color="#8c2530" style="--swatch:#8c2530" aria-label="红色背景"></button>
+            <button class="swatch" type="button" data-color="#315b74" style="--swatch:#315b74" aria-label="蓝色背景"></button>
+            <button class="swatch" type="button" data-color="#1f674f" style="--swatch:#1f674f" aria-label="绿幕背景"></button>
+          </div>
+          <div class="asset-actions"><button class="button" id="background-import" type="button"><i data-lucide="image-plus"></i>导入背景</button><button class="icon-button" id="background-clear" type="button" title="移除背景图" aria-label="移除背景图"><i data-lucide="image-off"></i></button></div>
+          <input type="file" id="background-input" accept="image/png,image/jpeg,image/webp" hidden>
+        </section>
+
+        <section class="tool-section">
+          <div class="section-heading"><span>03</span><h2>画幅</h2></div>
+          <div class="segmented" id="aspect-controls" role="group" aria-label="构图比例">
+            <button class="is-active" type="button" data-aspect="1.5">3:2</button>
+            <button type="button" data-aspect="1.333333">4:3</button>
+            <button type="button" data-aspect="1">1:1</button>
+            <button type="button" data-aspect="0.5625">9:16</button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="stage-column" aria-label="3D 摄影棚视口">
+        <div class="viewport-frame" id="viewport-frame">
+          <div id="viewport" role="img" aria-label="可交互的 3D 明星摄影棚"></div>
+          <div class="viewfinder" aria-hidden="true">
+            <i class="corner corner-tl"></i><i class="corner corner-tr"></i>
+            <i class="corner corner-bl"></i><i class="corner corner-br"></i>
+            <span class="focus-mark"></span>
+          </div>
+          <div class="viewport-meta viewport-meta-top"><span>CAM A</span><span id="lens-readout">50 MM</span></div>
+          <div class="viewport-meta viewport-meta-bottom"><span>LIVE VIEW</span><span id="resolution-readout">-- × --</span></div>
+          <div class="recording-indicator" id="recording-indicator" hidden><span></span> REC <time id="record-time">00:00</time></div>
+          <div class="loading-state" id="loading-state"><span></span><p>正在点亮摄影棚</p><noscript>请启用 JavaScript。</noscript></div>
+        </div>
+        <div class="stage-status">
+          <div><span class="status-light"></span><strong>STUDIO LIVE</strong></div>
+          <p id="status-message" role="status" aria-live="polite">摄影棚已就绪</p>
+          <div class="camera-data"><span>ISO 100</span><span>1/125</span><span id="aperture-readout">f/5.6</span></div>
+        </div>
+      </section>
+
+      <aside class="panel panel-right" aria-label="摄影参数">
+        <section class="tool-section">
+          <div class="section-heading"><span>04</span><h2>摄影机</h2></div>
+          <div class="framing-controls" id="framing-controls" role="group" aria-label="人物取景">
+            <button class="button" type="button" data-framing="full" title="全身取景"><i data-lucide="person-standing"></i>全身</button>
+            <button class="button" type="button" data-framing="half" title="半身取景"><i data-lucide="user"></i>半身</button>
+            <button class="button" type="button" data-framing="face" title="面部特写"><i data-lucide="scan-face"></i>面部</button>
+            <button class="button" type="button" data-framing="low" title="低机位仰拍"><i data-lucide="move-up-right"></i>仰拍</button>
+          </div>
+          <label class="range-control">
+            <span><b>焦距</b><output id="focal-output">50 mm</output></span>
+            <input id="focal-length" type="range" min="24" max="100" value="50" step="1">
+          </label>
+          <label class="range-control">
+            <span><b>曝光</b><output id="exposure-output">-1.0 EV</output></span>
+            <input id="exposure" type="range" min="0.125" max="2" value="0.5" step="0.025">
+          </label>
+          <label class="range-control">
+            <span><b>景深</b><output id="dof-output">关闭</output></span>
+            <input id="depth-of-field" type="range" min="0" max="100" value="0" step="1">
+          </label>
+          <label class="check-control"><input type="checkbox" id="auto-orbit">自动环绕运镜</label>
+        </section>
+
+        <section class="tool-section lights-section">
+          <div class="section-heading"><span>05</span><h2>摄影灯</h2></div>
+          <label class="check-control"><input type="checkbox" id="remove-shadows" checked>去除影子</label>
+          <label class="check-control"><input type="checkbox" id="show-rigs">显示灯架</label>
+          <div id="light-controls"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <template id="light-control-template">
+    <article class="light-control">
+      <header>
+        <div><span class="light-index"></span><b class="light-name"></b></div>
+        <label class="switch"><input class="light-enabled" type="checkbox" checked><span></span><em>开关</em></label>
+      </header>
+      <label class="range-control compact">
+        <span><b>亮度</b><output class="light-output"></output></span>
+        <input class="light-intensity" type="range" min="0" max="12" step="0.1">
+      </label>
+      <div class="light-row">
+        <label class="color-control"><span>颜色</span><input class="light-color" type="color"></label>
+        <label class="range-control compact position-control"><span><b>水平位置</b></span><input class="light-position" type="range" min="-6" max="6" step="0.1"></label>
+      </div>
+      <label class="range-control compact"><span><b>高度</b></span><input class="light-height" type="range" min="1" max="6" step="0.1"></label>
+      <label class="range-control compact"><span><b>前后位置</b></span><input class="light-depth" type="range" min="-4" max="6" step="0.1"></label>
+    </article>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/lucide@0.468.0/dist/umd/lucide.min.js" onload="lucide.createIcons()"></script>
+  <script type="module">
+    import('./src/main.js').catch((error) => {
+      console.error(error);
+      document.querySelector('#loading-state p').textContent = '加载失败，请检查网络并通过本地 HTTP 服务器打开';
+      document.querySelector('#loading-state span').hidden = true;
+      document.querySelector('#status-message').textContent = '摄影棚未就绪';
+    });
+  </script>
+</body>
+</html>
