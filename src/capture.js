@@ -65,7 +65,7 @@ export function createCaptureController({ renderer, composer, camera, character,
 
   function startRecordingUi() {
     const wasEditing = character.editing;
-    const lockedControls = [...root.querySelectorAll('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, [data-aspect]')];
+    const lockedControls = [...root.querySelectorAll('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, [data-aspect]')];
     const disabledStates = lockedControls.map((control) => control.disabled);
     restoreRecordingUi = () => {
       character.setEditing(wasEditing);

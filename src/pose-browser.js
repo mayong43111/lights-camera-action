@@ -7,52 +7,70 @@ export function createPoseBrowser(catalog, onSelect, root = document) {
   const results = root.querySelector('#pose-controls');
   const dialog = root.querySelector('#pose-dialog');
   const expand = root.querySelector('#pose-expand');
-  const folders = new Map([['', catalog.poses.length]]);
-  const entries = new Map(catalog.poses.map((pose) => [pose.id, pose]));
-  const buttons = catalog.poses.map((pose) => {
-    folders.set(pose.folder, (folders.get(pose.folder) ?? 0) + 1);
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pose-button';
-    button.dataset.pose = pose.id;
-    button.dataset.folder = pose.folder;
-    button.setAttribute('aria-pressed', 'false');
-    const icon = document.createElement('i');
-    icon.className = 'pose-glyph';
-    icon.dataset.lucide = pose.icon || 'user-round';
-    icon.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('b');
-    name.textContent = pose.name;
-    const check = document.createElement('i');
-    check.dataset.lucide = 'check';
-    check.className = 'pose-check';
-    check.setAttribute('aria-hidden', 'true');
-    button.append(icon, name, check);
-    return button;
-  });
-  results.replaceChildren(...buttons);
-  folderSelect.replaceChildren();
-  folderNav.replaceChildren();
-  for (const [folder, count] of folders) {
-    const label = folder || '全部姿势';
-    folderSelect.add(new Option(`${label} (${count})`, folder));
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pose-folder-button';
-    button.dataset.folder = folder;
-    const icon = document.createElement('i');
-    icon.dataset.lucide = folder ? 'folder' : 'layers';
-    icon.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('span');
-    name.textContent = label;
-    const total = document.createElement('small');
-    total.textContent = count;
-    button.append(icon, name, total);
-    button.addEventListener('click', () => {
-      folderSelect.value = folder;
-      updateResults();
+  const folders = new Map();
+  let entries = new Map();
+  let buttons = [];
+  let selectedId = null;
+
+  function updateCatalog(catalog, { reveal = null } = {}) {
+    const previousFolder = folderSelect.value;
+    const previousScroll = results.scrollTop;
+    folders.clear();
+    folders.set('', catalog.poses.length);
+    entries = new Map(catalog.poses.map((pose) => [pose.id, pose]));
+    buttons = catalog.poses.map((pose) => {
+      folders.set(pose.folder, (folders.get(pose.folder) ?? 0) + 1);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pose-button';
+      button.dataset.pose = pose.id;
+      button.dataset.folder = pose.folder;
+      button.setAttribute('aria-pressed', 'false');
+      const icon = document.createElement('i');
+      icon.className = 'pose-glyph';
+      icon.dataset.lucide = pose.icon || 'user-round';
+      icon.setAttribute('aria-hidden', 'true');
+      const name = document.createElement('b');
+      name.textContent = pose.name;
+      const check = document.createElement('i');
+      check.dataset.lucide = 'check';
+      check.className = 'pose-check';
+      check.setAttribute('aria-hidden', 'true');
+      button.append(icon, name, check);
+      return button;
     });
-    folderNav.append(button);
+    results.replaceChildren(...buttons);
+    folderSelect.replaceChildren();
+    folderNav.replaceChildren();
+    for (const [folder, count] of folders) {
+      const label = folder || '全部姿势';
+      folderSelect.add(new Option(`${label} (${count})`, folder));
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'pose-folder-button';
+      button.dataset.folder = folder;
+      const icon = document.createElement('i');
+      icon.dataset.lucide = folder ? 'folder' : 'layers';
+      icon.setAttribute('aria-hidden', 'true');
+      const name = document.createElement('span');
+      name.textContent = label;
+      const total = document.createElement('small');
+      total.textContent = count;
+      button.append(icon, name, total);
+      button.addEventListener('click', () => {
+        folderSelect.value = folder;
+        updateResults();
+      });
+      folderNav.append(button);
+    }
+    folderSelect.value = folders.has(previousFolder) ? previousFolder : '';
+    if (reveal && entries.has(reveal)) {
+      folderSelect.value = entries.get(reveal).folder;
+      search.value = '';
+    }
+    updateResults();
+    setSelection(selectedId);
+    if (!reveal) results.scrollTop = previousScroll;
   }
 
   function updateResults() {
@@ -73,6 +91,7 @@ export function createPoseBrowser(catalog, onSelect, root = document) {
   }
 
   function setSelection(id) {
+    selectedId = id;
     for (const button of buttons) {
       const selected = button.dataset.pose === id;
       button.classList.toggle('is-active', selected);
@@ -114,6 +133,6 @@ export function createPoseBrowser(catalog, onSelect, root = document) {
     const bounds = dialog.getBoundingClientRect();
     if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) dialog.close();
   });
-  updateResults();
-  return { setSelection };
+  updateCatalog(catalog);
+  return { setSelection, updateCatalog };
 }

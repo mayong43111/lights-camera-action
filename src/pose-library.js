@@ -10,7 +10,7 @@ export function validatePoseLibrary(data) {
       || ['constructor', 'prototype', '__proto__'].includes(pose.id) || identifiers.has(pose.id)
       || !text(pose.name) || !text(pose.folder)
       || (pose.icon != null && (typeof pose.icon !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(pose.icon)))
-      || !validPose({ format: 'studio-pose', version: 1, units: data.units, rotation: 0, joints: pose.joints })) {
+      || !validPose({ format: 'studio-pose', version: 1, units: data.units, rotation: pose.rotation ?? 0, placement: pose.placement, joints: pose.joints })) {
       throw new Error(`姿势库条目无效或 ID 重复：${typeof pose?.id === 'string' ? pose.id : '未命名'}`);
     }
     identifiers.add(pose.id);

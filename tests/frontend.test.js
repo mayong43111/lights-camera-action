@@ -4,6 +4,7 @@ import { loadPoseLibrary, validatePoseLibrary } from '../src/pose-library.js';
 import { createPoseBrowser } from '../src/pose-browser.js';
 import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studio-scene.js';
 import { createCaptureController } from '../src/capture.js';
+import { createPoseStore } from '../src/pose-store.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -66,6 +67,80 @@ export async function runTests() {
     poses: Object.fromEntries(catalog.poses.map((pose) => [pose.id, pose.joints])),
     characters: { pixiv: {} }, lightDefinitions: LIGHT_DEFINITIONS,
   };
+  function storageFixture() {
+    let text = null;
+    return { getItem: () => text, setItem: (key, value) => { text = value; } };
+  }
+  const savedPose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0.4, placement: { grounded: false, height: 1.5 }, joints: { head: [0.2, 0.1, 0] } };
+  await test('save overrides one preset and preserves source catalog', () => {
+    const before = JSON.stringify(catalog);
+    const storage = storageFixture();
+    const store = createPoseStore(catalog, () => storage);
+    const saved = store.save(catalog.defaultPose, savedPose);
+    equal(saved.id, catalog.defaultPose);
+    equal(saved.joints, savedPose.joints);
+    equal(saved.rotation, savedPose.rotation);
+    equal(saved.placement, savedPose.placement);
+    equal(store.catalog.poses.length, catalog.poses.length);
+    equal(JSON.stringify(catalog), before);
+  });
+  await test('save as and reload preserves full pose', () => {
+    const storage = storageFixture();
+    const store = createPoseStore(catalog, () => storage);
+    const saved = store.saveAs({ name: 'New Pose', folder: 'New Folder' }, savedPose);
+    const restored = createPoseStore(catalog, () => storage);
+    equal(restored.catalog.poses.length, catalog.poses.length + 1);
+    equal(restored.catalog.poses.find((pose) => pose.id === saved.id), saved);
+    restored.save(saved.id, { ...savedPose, rotation: 0.8 });
+    equal(restored.catalog.poses.length, catalog.poses.length + 1);
+    equal(restored.catalog.poses.find((pose) => pose.id === saved.id).rotation, 0.8);
+  });
+  await test('invalid or duplicate saves leave storage unchanged', () => {
+    const storage = storageFixture();
+    const store = createPoseStore(catalog, () => storage);
+    const entry = catalog.poses[0];
+    for (const details of [{ name: ' ', folder: 'New' }, { name: 'New', folder: '' }, { name: 'x'.repeat(81), folder: 'New' }, { name: entry.name, folder: entry.folder }]) {
+      let rejected = false;
+      try { store.saveAs(details, savedPose); } catch { rejected = true; }
+      assert(rejected, 'invalid metadata accepted');
+    }
+    let rejected = false;
+    try { store.save(entry.id, { ...savedPose, rotation: Infinity }); } catch { rejected = true; }
+    assert(rejected, 'invalid snapshot accepted');
+    equal(storage.getItem(), null);
+  });
+  await test('storage failure does not mutate the active catalog', () => {
+    const storage = storageFixture();
+    const store = createPoseStore(catalog, () => storage);
+    const before = store.catalog;
+    storage.setItem = () => { throw new Error('Quota'); };
+    let rejected = false;
+    try { store.save(catalog.defaultPose, savedPose); } catch { rejected = true; }
+    assert(rejected, 'quota failure swallowed');
+    equal(store.catalog, before);
+  });
+  await test('corrupted storage falls back without overwriting data', () => {
+    const storage = storageFixture();
+    storage.setItem('', '{invalid');
+    const store = createPoseStore(catalog, () => storage);
+    assert(store.warning, 'missing corruption warning');
+    equal(store.catalog, catalog);
+    let rejected = false;
+    try { store.save(catalog.defaultPose, savedPose); } catch { rejected = true; }
+    assert(rejected, 'corrupt storage overwritten');
+    equal(storage.getItem(), '{invalid');
+  });
+  await test('stale tab cannot overwrite a newer library', () => {
+    const storage = storageFixture();
+    const first = createPoseStore(catalog, () => storage);
+    const second = createPoseStore(catalog, () => storage);
+    first.save(catalog.defaultPose, savedPose);
+    const written = storage.getItem();
+    let rejected = false;
+    try { second.save(catalog.defaultPose, { ...savedPose, rotation: 0.9 }); } catch { rejected = true; }
+    assert(rejected, 'stale write accepted');
+    equal(storage.getItem(), written);
+  });
   await test('pose protocol and catalog', () => {
     equal(JOINTS.length, 51);
     for (const pose of catalog.poses) assert(validPose({ format: 'studio-pose', version: 1, units: 'radians', rotation: 0, joints: pose.joints }), pose.id);
@@ -90,6 +165,12 @@ export async function runTests() {
     assert(validProject({ version: 1, state }, registry), 'legacy defaults rejected');
     state.jointPose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0.2, joints: { head: [0.1, 0, 0] }, placement: { grounded: false, height: 1.5 } };
     assert(validProject({ version: 1, state }, registry), 'floating pose rejected');
+    const portable = structuredClone(state);
+    portable.pose = 'user-other-browser';
+    portable.poseSaveTarget = portable.pose;
+    assert(validProject({ version: 1, state: portable }, registry), 'portable project rejected');
+    delete portable.jointPose;
+    assert(!validProject({ version: 1, state: portable }, registry), 'unknown pose without snapshot accepted');
     state.jointPose.placement.height = Infinity;
     assert(!validProject({ version: 1, state }, registry), 'invalid placement accepted');
   });
@@ -166,6 +247,10 @@ export async function runTests() {
     data.poses.push({ id: 'testEntry', name: 'Test Pose', folder: 'Test Folder', joints: { head: [0, 0, 0] } });
     let selected;
     const browser = createPoseBrowser(data, (pose) => { selected = pose.id; }, root);
+    browser.updateCatalog(data);
+    browser.updateCatalog(data, { reveal: 'testEntry' });
+    equal(root.querySelectorAll('[data-pose]').length, data.poses.length);
+    equal(root.querySelector('#pose-folder').value, 'Test Folder');
     const folder = root.querySelector('#pose-folder');
     folder.value = 'Test Folder';
     folder.dispatchEvent(new Event('change'));

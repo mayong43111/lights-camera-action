@@ -16,10 +16,12 @@ export function validProject(project, { poses, characters, lightDefinitions }) {
   const finiteRange = (value, min, max) => (typeof value === 'number' || typeof value === 'string') && value !== '' && Number.isFinite(Number(value)) && Number(value) >= min && Number(value) <= max;
   const vector = (value) => Array.isArray(value) && value.length === 3 && value.every((number) => typeof number === 'number' && Number.isFinite(number));
   const color = (value) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
-  if (project?.version !== 1 || !state || !Object.hasOwn(poses, state.pose) || !color(state.backdrop)) return false;
+  if (project?.version !== 1 || !state || typeof state.pose !== 'string' || !color(state.backdrop)) return false;
+  if (!Object.hasOwn(poses, state.pose) && (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(state.pose) || !validPose(state.jointPose))) return false;
   if (state.character != null && !Object.hasOwn(characters, state.character)) return false;
   if (state.jointPose != null && !validPose(state.jointPose)) return false;
   if (state.poseCustomized != null && typeof state.poseCustomized !== 'boolean') return false;
+  if (state.poseSaveTarget != null && state.poseSaveTarget !== state.pose) return false;
   if (state.removeShadows != null && typeof state.removeShadows !== 'boolean') return false;
   if (!['1.5', '1.333333', '1', '0.5625'].includes(String(state.aspect)) || !vector(state.cameraPosition) || !vector(state.target)) return false;
   if (!finiteRange(state.focal, 24, 100) || !finiteRange(state.exposure, 0.125, 2) || !finiteRange(state.dof, 0, 100)) return false;

@@ -13,9 +13,12 @@ import { loadPoseLibrary } from './pose-library.js';
 import { createPoseBrowser } from './pose-browser.js';
 import { createStudio, createStudioLight, LIGHT_DEFINITIONS as lightDefinitions } from './studio-scene.js';
 import { createCaptureController } from './capture.js';
+import { createPoseStore } from './pose-store.js';
+import { createPoseSaveControls } from './pose-save.js';
 
-const poseLibrary = await loadPoseLibrary();
-const poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
+const poseStore = createPoseStore(await loadPoseLibrary());
+let poseLibrary = poseStore.catalog;
+let poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
 const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
   rememberState();
   applyPose(pose.id);
@@ -88,6 +91,7 @@ const lights = Object.fromEntries(lightDefinitions.map((definition) => {
 scene.add(new THREE.HemisphereLight('#ffffff', '#c8d7e0', 0.45));
 
 let currentPose = poseLibrary.defaultPose;
+let poseSaveTarget = currentPose;
 let currentAspect = 1.5;
 let history = [];
 let isRestoringState = false;
@@ -102,10 +106,19 @@ const capture = createCaptureController({
   getAspect: () => currentAspect,
   isLoading: () => modelLoading,
   onPhoto: (image, name) => retouch.setPhoto(image, name),
-  onResize: resizeViewport,
+  onResize: () => { resizeViewport(); poseSaving.update(); },
   announce,
 });
 const { takePhoto, toggleRecording } = capture;
+const poseSaving = createPoseSaveControls({
+  getEntry: () => poseLibrary.poses.find((pose) => pose.id === poseSaveTarget),
+  getFolders: () => [...new Set(poseLibrary.poses.map((pose) => pose.folder))],
+  capturePose: () => star.capturePose(),
+  isAvailable: () => !modelLoading && !!star.vrm && !capture.isRecording,
+  save: (snapshot) => saveLibraryPose(snapshot),
+  saveAs: (details, snapshot) => saveLibraryPose(snapshot, details),
+  announce,
+});
 
 applyPose(currentPose, true);
 buildLightControls();
@@ -117,13 +130,40 @@ resizeViewport();
 renderer.setAnimationLoop(render);
 await switchCharacter('pixiv', false);
 document.querySelector('#loading-state').classList.add('is-hidden');
+if (poseStore.warning) announce(poseStore.warning);
 
 function applyPose(name) {
   currentPose = name;
-  star.applyAngles(poses[name]);
+  poseSaveTarget = name;
+  const entry = poseLibrary.poses.find((pose) => pose.id === name);
+  star.restorePose({
+    format: 'studio-pose', version: 1, units: 'radians', joints: poses[name],
+    rotation: entry.rotation ?? star.group.rotation.y,
+    placement: entry.placement ?? { grounded: star.grounded, height: star.height },
+  });
+  const degrees = THREE.MathUtils.radToDeg(star.group.rotation.y);
+  document.querySelector('#star-rotation').value = degrees;
+  document.querySelector('#rotation-output').value = `${Number(degrees.toFixed(1))}°`;
+  syncPlacementControls();
   poseCustomized = false;
   syncJointControls();
   poseBrowser.setSelection(name);
+  poseSaving.update();
+}
+
+function saveLibraryPose(snapshot, details = null) {
+  const saved = details ? poseStore.saveAs(details, snapshot) : poseStore.save(poseSaveTarget, snapshot);
+  rememberState();
+  poseLibrary = poseStore.catalog;
+  poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
+  poseBrowser.updateCatalog(poseLibrary, details ? { reveal: saved.id } : {});
+  currentPose = saved.id;
+  poseSaveTarget = saved.id;
+  poseCustomized = false;
+  poseBrowser.setSelection(saved.id);
+  poseSaving.update();
+  window.lucide?.createIcons();
+  announce(`${details ? '已另存' : '已保存'}“${saved.name}”到本机姿势库`);
 }
 
 function buildLightControls() {
@@ -168,6 +208,7 @@ function bindInterface() {
     rememberState();
     star.setGrounded(event.target.checked);
     syncPlacementControls();
+    onJointChange(star.selected);
   });
   for (const selector of ['#character-height', '#character-height-value']) {
     const input = document.querySelector(selector);
@@ -177,6 +218,7 @@ function bindInterface() {
       if (input.value === '' || !Number.isFinite(Number(input.value))) return;
       star.setHeight(Number(input.value));
       syncPlacementControls();
+      onJointChange(star.selected);
     });
   }
   document.querySelector('#pose-mode').addEventListener('change', (event) => {
@@ -218,6 +260,7 @@ function bindInterface() {
   bindRange('#star-rotation', '#rotation-output', (value, output) => {
     star.group.rotation.y = THREE.MathUtils.degToRad(value);
     output.value = `${value}°`;
+    if (!isRestoringState && star.vrm) onJointChange(star.selected);
   });
   bindRange('#focal-length', '#focal-output', (value, output) => {
     camera.setFocalLength(value);
@@ -378,6 +421,7 @@ function render(time) {
 function captureState() {
   return {
     pose: currentPose,
+    poseSaveTarget,
     backdrop: `#${studio.material.color.getHexString()}`,
     aspect: document.documentElement.style.getPropertyValue('--frame-aspect') || '1.5',
     cameraPosition: camera.position.toArray(),
@@ -423,8 +467,8 @@ async function undo() {
 async function restoreState(state) {
   if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) return false;
   isRestoringState = true;
-  currentPose = state.pose;
-  applyPose(state.pose);
+  const knownPose = Object.hasOwn(poses, state.pose);
+  applyPose(knownPose ? state.pose : poseLibrary.defaultPose);
   studio.material.color.set(state.backdrop);
   document.querySelectorAll('[data-color]').forEach((button) => button.classList.toggle('is-active', button.dataset.color.toLowerCase() === state.backdrop.toLowerCase()));
   document.documentElement.style.setProperty('--frame-aspect', state.aspect);
@@ -447,7 +491,9 @@ async function restoreState(state) {
       star.setJoint(`${side}UpperArm`, angles);
     }
   }
-  if (state.poseCustomized) onJointChange(star.selected);
+  poseSaveTarget = !knownPose || state.poseSaveTarget === null ? null : state.pose;
+  poseSaving.update();
+  if (state.poseCustomized || !knownPose) onJointChange(star.selected);
   else syncJointControls();
   syncPlacementControls();
   document.querySelector('#auto-orbit').checked = state.autoOrbit ?? false;
@@ -630,6 +676,8 @@ function onJointChange(id, edited = true) {
   if (edited) {
     poseCustomized = true;
     poseBrowser.setSelection(null);
+    const entry = poseLibrary.poses.find((pose) => pose.id === poseSaveTarget);
+    if (entry) document.querySelector('#pose-state').textContent = `${entry.name} · 未保存`;
   }
   syncJointControls();
 }
@@ -641,7 +689,7 @@ async function switchCharacter(id, recordHistory = true) {
   modelLoading = true;
   document.querySelector('#character-controls').setAttribute('aria-busy', 'true');
   document.querySelector('#model-credit').textContent = '正在加载人偶…';
-  const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button'];
+  const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button', '#pose-save', '#pose-save-as'];
   actions.forEach((selector) => { document.querySelector(selector).disabled = true; });
   try {
     await star.load(id);
@@ -662,6 +710,7 @@ async function switchCharacter(id, recordHistory = true) {
     modelLoading = false;
     document.querySelector('#character-controls').setAttribute('aria-busy', 'false');
     actions.forEach((selector) => { document.querySelector(selector).disabled = false; });
+    poseSaving.update();
   }
 }
 
@@ -687,6 +736,8 @@ async function importPose(event) {
     star.restorePose(pose);
     setRangeValue('#star-rotation', THREE.MathUtils.radToDeg(pose.rotation));
     syncPlacementControls();
+    poseSaveTarget = null;
+    poseSaving.update();
     onJointChange(star.selected);
     announce('姿势已导入');
   } catch (error) {

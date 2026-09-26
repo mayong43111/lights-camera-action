@@ -103,6 +103,8 @@ Three.js 0.180.0 与 Lucide 0.468.0 通过固定版本 CDN 加载，需要联网
 - `src/pose-ik.js`：四肢 CCD 求解、可达距离限制、肘膝限位和端点朝向保持。
 - `src/pose-library.js`：读取及校验姿势 JSON，复用 `validPose` 校验标准关节；拒绝重复 ID、非法角度与缺失默认姿势。数据限制为 2 MB、最多 2000 条，15 秒加载超时。
 - `src/pose-browser.js`：姿势按钮、分类导航、过滤、弹窗及选中态；只向外报告选择事件，不修改骨骼或撤销历史。所有动态面板建立后由入口统一转换图标。
+- `src/pose-store.js`：以 `studio-pose-library-v1` 保存本地覆盖及新增条目，合并内置目录，校验成功且持久化写入完成后才更新内存；拒绝损坏数据、写入失败和检测到的陈旧页面覆盖。
+- `src/pose-save.js`：保存目标与另存窗口，支持名称和分类校验；库条目保存关节、朝向和 placement，不含摄影参数。导入外部姿势解除覆盖目标，需另存；项目可选 `poseSaveTarget: null` 延续该保护。本地存储按浏览器 origin 隔离，持久化写入不属于场景撤销历史。
 - `assets/poses/library.json`：唯一姿势数据源，包含默认 ID、分类元数据与弧度制关节角度；旧姿势 ID 保持兼容。
 - `src/mannequin.js`：男女白模的源骨骼映射、手臂 T 姿势校准及 VRMHumanoid 标准化驱动。
 - `src/retouch.js`：修图输入、上传授权、请求与原图/结果预览，状态只保留在当前页面。
