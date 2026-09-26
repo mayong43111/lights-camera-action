@@ -6,10 +6,17 @@ import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Character, CHARACTERS, JOINTS, validPose } from './character.js';
+import { createRetouch } from './retouch.js';
+import { loadPoseLibrary, renderPoseButtons } from './pose-library.js';
+
+const poseLibrary = await loadPoseLibrary();
+const poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
+renderPoseButtons(poseLibrary, document.querySelector('#pose-controls'));
 
 const viewport = document.querySelector('#viewport');
 const viewportFrame = document.querySelector('#viewport-frame');
 const statusMessage = document.querySelector('#status-message');
+const retouch = createRetouch(() => takePhoto({ download: false }));
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#eef2f4');
@@ -77,73 +84,7 @@ const lights = Object.fromEntries(lightDefinitions.map((definition) => {
 
 scene.add(new THREE.HemisphereLight('#ffffff', '#c8d7e0', 0.45));
 
-const poses = {
-  warrior: {
-    root: [0, -0.2, 0], head: [0, 0.85, 0],
-    leftUpperArm: [0, 0, 0.04], leftLowerArm: [0, -0.08, 0],
-    rightUpperArm: [0, 0, -0.04], rightLowerArm: [0, 0.08, 0],
-    leftUpperLeg: [-Math.PI / 2, Math.PI / 2 - 0.95, Math.PI / 2], leftLowerLeg: [0.95, 0, 0],
-    rightUpperLeg: [-Math.PI / 2, -Math.PI / 2 + 0.66, -Math.PI / 2], rightFoot: [0.66, 0, 0],
-  },
-  triangle: {
-    torso: [0, 0, -0.95], chest: [0, 0, -0.12], head: [0, -0.3, 0.35],
-    leftUpperArm: [0, 0, -0.5], rightUpperArm: [0, 0, -0.5],
-    leftUpperLeg: [0, 0, 0.52], leftFoot: [0, 0, -0.52],
-    rightUpperLeg: [0, 0, -0.52], rightFoot: [0, 0, 0.52],
-  },
-  arabesque: {
-    root: [0.35, -0.6, 0], torso: [0.28, 0, 0], head: [-0.35, 0.2, 0],
-    leftUpperArm: [0, -1.05, 0.3], leftLowerArm: [0, -0.12, 0],
-    rightUpperArm: [0, 0.25, -0.15], rightLowerArm: [0, 0.12, 0],
-    leftUpperLeg: [-0.35, 0, 0], leftFoot: [0.05, 0, 0],
-    rightUpperLeg: [1.2, 0, 0], rightLowerLeg: [0.04, 0, 0], rightFoot: [0.65, 0, 0],
-  },
-  grandJete: {
-    root: [0, -0.65, 0], torso: [-0.1, 0, 0], head: [0.1, 0.3, 0],
-    leftUpperArm: [0, -0.15, 0.65], leftLowerArm: [0, -0.12, 0],
-    rightUpperArm: [0, 0.15, -0.65], rightLowerArm: [0, 0.12, 0],
-    leftUpperLeg: [-1.45, 0, 0], leftLowerLeg: [0.06, 0, 0], leftFoot: [0.55, 0, 0],
-    rightUpperLeg: [1.4, 0, 0], rightLowerLeg: [0.06, 0, 0], rightFoot: [0.55, 0, 0],
-  },
-  editorial: {
-    root: [0, -0.12, 0], head: [0.04, 0.15, 0.05],
-    leftUpperArm: [0.08, 0, -1.2], leftLowerArm: [0, -0.2, 0],
-    rightUpperArm: [-0.05, 0, 1.35], rightLowerArm: [0, 0.35, 0],
-    leftUpperLeg: [0.02, 0, -0.05], rightUpperLeg: [-0.08, 0, 0.12], rightLowerLeg: [0.18, 0, 0],
-  },
-  power: {
-    root: [0, 0.06, 0], head: [-0.04, -0.05, 0],
-    leftUpperArm: [0, 0, -0.85], leftLowerArm: [0, -1.25, -0.1],
-    rightUpperArm: [0, 0, 0.85], rightLowerArm: [0, 1.25, 0.1],
-    leftUpperLeg: [0, 0, -0.18], rightUpperLeg: [0, 0, 0.18],
-  },
-  wave: {
-    root: [0, -0.18, 0], head: [0, 0.18, -0.08],
-    leftUpperArm: [0, 0, -1.3], leftLowerArm: [0, -0.15, 0],
-    rightUpperArm: [0, 0, -0.45], rightLowerArm: [0, 0, -1.2],
-    leftUpperLeg: [0, 0, -0.08], rightUpperLeg: [0, 0, 0.12],
-  },
-  runway: {
-    root: [0, -0.42, 0], head: [0.02, 0.42, -0.04],
-    leftUpperArm: [-0.18, 0.12, -1.3], leftLowerArm: [0, -0.2, 0],
-    rightUpperArm: [0.2, -0.1, 1.3], rightLowerArm: [0, 0.28, 0],
-    leftUpperLeg: [-0.12, 0, -0.08], rightUpperLeg: [-0.35, 0, 0.12], rightLowerLeg: [0.48, 0, 0],
-  },
-  dance: {
-    root: [0, 0.18, -0.06], head: [0, -0.2, 0.12],
-    leftUpperArm: [0.2, 0, 0.25], leftLowerArm: [0, -0.7, 0.2],
-    rightUpperArm: [-0.2, 0, -0.3], rightLowerArm: [0, 0.5, -0.7],
-    leftUpperLeg: [-0.08, 0, -0.18], rightUpperLeg: [-0.5, 0, 0.22], rightLowerLeg: [0.75, 0, 0],
-  },
-  profile: {
-    root: [0, -1.1, 0], head: [0.02, 0.65, 0.06],
-    leftUpperArm: [-0.12, 0, -1.2], leftLowerArm: [0, -0.65, 0],
-    rightUpperArm: [0.16, 0, 1.25], rightLowerArm: [0, 0.8, 0],
-    leftUpperLeg: [0, 0, -0.08], rightUpperLeg: [-0.12, 0, 0.1],
-  },
-};
-
-let currentPose = 'warrior';
+let currentPose = poseLibrary.defaultPose;
 let currentAspect = 1.5;
 let takeNumber = 1;
 let recorder = null;
@@ -198,18 +139,21 @@ function createStudio() {
   group.add(sweep);
 
   const markMaterial = new THREE.MeshBasicMaterial({ color: '#e65343', side: THREE.DoubleSide });
+  const floorMarks = new THREE.Group();
+  floorMarks.name = 'FloorPositionMarks';
+  group.add(floorMarks);
   for (let index = 0; index < 4; index += 1) {
     const mark = new THREE.Mesh(new THREE.PlaneGeometry(index % 2 ? 0.05 : 0.65, index % 2 ? 0.65 : 0.05), markMaterial);
     mark.rotation.x = -Math.PI / 2;
     mark.position.set(0, 0.006, 0);
-    group.add(mark);
+    floorMarks.add(mark);
   }
 
   const photoBackdrop = new THREE.Mesh(new THREE.PlaneGeometry(12, 6.75), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
   photoBackdrop.position.set(0, 3.375, -4.85);
   photoBackdrop.visible = false;
   group.add(photoBackdrop);
-  return { group, material: backdropMaterial, photoBackdrop };
+  return { group, material: backdropMaterial, photoBackdrop, floorMarks };
 }
 
 function createStar() {
@@ -598,7 +542,11 @@ function render(time) {
   composer.render();
 }
 
-function takePhoto() {
+function takePhoto({ download = true } = {}) {
+  if (modelLoading || !star.vrm) {
+    announce('人偶正在加载，请稍后再拍摄');
+    return;
+  }
   if (recorder && recorder.state !== 'inactive') {
     announce('请先停止录制再导出图片');
     return;
@@ -612,25 +560,33 @@ function takePhoto() {
   overlay.hidden = true;
   const wasEditing = star.editing;
   star.setEditing(false);
+  const marksVisible = studio.floorMarks.visible;
 
   try {
+  studio.floorMarks.visible = false;
   renderer.setPixelRatio(1);
   renderer.setSize(width, height, false);
   composer.setSize(width, height);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+  star.update(0);
   composer.render();
   const dataUrl = renderer.domElement.toDataURL('image/png');
 
-  const link = document.createElement('a');
-  link.download = `lights-camera-take-${String(takeNumber).padStart(2, '0')}.png`;
-  link.href = dataUrl;
-  link.click();
-  takeNumber += 1;
-  document.querySelector('#take-number').textContent = String(takeNumber).padStart(2, '0');
-
-  announce(`图片已导出：${width} × ${height}`);
+  const name = download ? `lights-camera-take-${String(takeNumber).padStart(2, '0')}.png` : '当前场景.png';
+  if (download) {
+    const link = document.createElement('a');
+    link.download = name;
+    link.href = dataUrl;
+    link.click();
+    retouch.setPhoto(dataUrl, name);
+    takeNumber += 1;
+    document.querySelector('#take-number').textContent = String(takeNumber).padStart(2, '0');
+    announce(`图片已导出：${width} × ${height}`);
+  }
+  return { image: dataUrl, name };
   } finally {
+  studio.floorMarks.visible = marksVisible;
   renderer.setPixelRatio(previousRatio);
   renderer.setSize(previousSize.x, previousSize.y, false);
   composer.setSize(previousSize.x, previousSize.y);
@@ -855,7 +811,7 @@ function setRangeValue(selector, value) {
 async function resetStudio() {
   rememberState();
   const defaults = {
-    pose: 'warrior', backdrop: '#edf4f6', aspect: '1.5',
+    pose: poseLibrary.defaultPose, backdrop: '#edf4f6', aspect: '1.5',
     cameraPosition: [0.8, 2.1, 7.5], target: [0, 1.65, 0], focal: '50', exposure: '0.5', dof: '0',
     lights: Object.fromEntries(lightDefinitions.map((light) => [light.id, { enabled: true, intensity: String(light.intensity), color: light.color, position: String(light.position[0]) }])),
   };

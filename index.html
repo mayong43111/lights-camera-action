@@ -39,6 +39,7 @@
         <button class="icon-button" id="undo-button" type="button" title="撤销上一步" aria-label="撤销上一步"><i data-lucide="undo-2"></i></button>
         <button class="icon-button" id="reset-button" type="button" title="重置摄影棚" aria-label="重置摄影棚"><i data-lucide="rotate-ccw"></i></button>
         <button class="button button-light" id="photo-button" type="button" title="拍摄图片" aria-label="拍摄图片"><i data-lucide="camera"></i><span class="action-label">拍摄图片</span></button>
+        <button class="icon-button" id="retouch-open" type="button" title="AI 修图" aria-label="AI 修图" aria-haspopup="dialog"><i data-lucide="wand-sparkles"></i></button>
         <button class="button button-record" id="record-button" type="button" title="录制视频" aria-label="录制视频"><i data-lucide="video"></i><span class="action-label" id="record-label">录制视频</span></button>
       </nav>
     </header>
@@ -65,18 +66,7 @@
                 <div class="pose-search"><i data-lucide="search"></i><input id="pose-search" type="search" placeholder="搜索姿势" aria-label="搜索当前文件夹中的姿势" autocomplete="off"><button class="icon-button" id="pose-search-clear" type="button" title="清空搜索" aria-label="清空搜索" hidden><i data-lucide="x"></i></button></div>
               </div>
               <div class="pose-results">
-                <div class="pose-grid" id="pose-controls" role="group" aria-label="姿势列表">
-                  <button class="pose-button is-active" type="button" data-pose="warrior" data-folder="瑜伽"><i class="pose-glyph" data-lucide="accessibility"></i><b>瑜伽战士</b></button>
-                  <button class="pose-button" type="button" data-pose="triangle" data-folder="瑜伽"><i class="pose-glyph" data-lucide="triangle"></i><b>瑜伽三角</b></button>
-                  <button class="pose-button" type="button" data-pose="arabesque" data-folder="芭蕾舞"><i class="pose-glyph" data-lucide="feather"></i><b>芭蕾燕式</b></button>
-                  <button class="pose-button" type="button" data-pose="grandJete" data-folder="芭蕾舞"><i class="pose-glyph" data-lucide="move-up-right"></i><b>芭蕾大跳</b></button>
-                  <button class="pose-button" type="button" data-pose="editorial" data-folder="服装杂志"><i class="pose-glyph" data-lucide="user-round"></i><b>封面站姿</b></button>
-                  <button class="pose-button" type="button" data-pose="power" data-folder="服装杂志"><i class="pose-glyph" data-lucide="accessibility"></i><b>气场全开</b></button>
-                  <button class="pose-button" type="button" data-pose="wave" data-folder="舞台表演"><i class="pose-glyph" data-lucide="hand"></i><b>挥手亮相</b></button>
-                  <button class="pose-button" type="button" data-pose="runway" data-folder="服装杂志"><i class="pose-glyph" data-lucide="footprints"></i><b>秀场定格</b></button>
-                  <button class="pose-button" type="button" data-pose="dance" data-folder="舞台表演"><i class="pose-glyph" data-lucide="music-2"></i><b>舞台律动</b></button>
-                  <button class="pose-button" type="button" data-pose="profile" data-folder="服装杂志"><i class="pose-glyph" data-lucide="scan-face"></i><b>侧身回眸</b></button>
-                </div>
+                <div class="pose-grid" id="pose-controls" role="group" aria-label="姿势列表"></div>
                 <p class="pose-empty" id="pose-empty" hidden>没有匹配的姿势</p>
               </div>
               <output class="pose-count" id="pose-count" aria-live="polite"></output>
@@ -180,6 +170,34 @@
     </main>
   </div>
 
+  <dialog id="retouch-dialog" class="retouch-dialog" aria-labelledby="retouch-title">
+    <header class="retouch-header"><div><h2 id="retouch-title">AI 修图</h2><span id="retouch-config">Azure Foundry</span></div><div class="retouch-actions"><button class="icon-button" id="retouch-config-refresh" type="button" title="重新检查配置" aria-label="重新检查配置"><i data-lucide="refresh-cw"></i></button><button class="icon-button" id="retouch-close" type="button" title="关闭修图窗口" aria-label="关闭修图窗口"><i data-lucide="x"></i></button></div></header>
+    <div class="retouch-workspace">
+      <section class="retouch-image-area" aria-label="照片预览">
+        <div class="retouch-image-toolbar"><div class="retouch-tabs" role="tablist" aria-label="修图预览"><button id="retouch-original-tab" type="button" role="tab" data-retouch-view="source" aria-selected="true" aria-controls="retouch-preview">原图</button><button id="retouch-result-tab" type="button" role="tab" data-retouch-view="result" aria-selected="false" aria-controls="retouch-preview" disabled>修图结果</button></div><div class="retouch-actions"><button class="icon-button" id="retouch-latest" type="button" title="使用最近拍摄的照片" aria-label="使用最近拍摄的照片" disabled><i data-lucide="camera"></i></button><button class="icon-button" id="retouch-source-import" type="button" title="导入原图" aria-label="导入原图"><i data-lucide="image-plus"></i></button></div></div>
+        <div class="retouch-preview" id="retouch-preview" role="tabpanel" aria-labelledby="retouch-original-tab"><img id="retouch-preview-image" alt="修图原图" hidden><p id="retouch-empty">尚无照片</p></div>
+        <div class="retouch-image-footer"><span id="retouch-photo-name">未选择原图</span><button class="icon-button" id="retouch-download" type="button" title="下载修图结果" aria-label="下载修图结果" disabled><i data-lucide="download"></i></button><button class="icon-button" id="retouch-continue" type="button" title="以结果继续修图" aria-label="以结果继续修图" disabled><i data-lucide="replace"></i></button></div>
+        <input type="file" id="retouch-source-input" accept="image/png,image/jpeg" hidden>
+      </section>
+      <form id="retouch-form" class="retouch-settings">
+        <fieldset id="retouch-fields">
+          <label for="retouch-prompt">修图要求</label>
+          <div class="retouch-prompt-field">
+            <textarea id="retouch-prompt" rows="5" maxlength="4000" placeholder="输入修图要求" required>以原图为姿势与构图依据，保留人物的身体姿态、肢体位置、拍摄角度和光照。参考人物图中的面部特征、发型、服装与整体造型，生成自然协调的新图片。保持人体比例合理、手部结构自然，使人物与场景融合；不要照搬参考图的姿势或背景。未上传参考图时，保留原图人物外观，仅优化画面质感与细节。</textarea>
+            <div class="retouch-prompt-actions"><button class="icon-button" id="retouch-prompt-clear" type="button" title="清空修图要求" aria-label="清空修图要求"><i data-lucide="eraser"></i></button></div>
+          </div>
+          <div class="retouch-reference-heading"><label for="retouch-reference-input">参考图 <span>可选</span></label><button class="icon-button" id="retouch-reference-clear" type="button" title="移除参考图" aria-label="移除参考图" disabled><i data-lucide="trash-2"></i></button></div>
+          <button type="button" id="retouch-reference-import" class="retouch-reference"><img id="retouch-reference-image" alt="人物参考图" hidden><span id="retouch-reference-empty"><i data-lucide="image-plus"></i>添加参考图</span></button>
+          <input type="file" id="retouch-reference-input" accept="image/png,image/jpeg" hidden>
+          <div class="retouch-options"><label for="retouch-quality">质量<select id="retouch-quality"><option value="low">快速</option><option value="medium" selected>标准</option><option value="high">高质量</option></select></label><label for="retouch-size">尺寸<select id="retouch-size"><option value="auto">自动</option><option value="1024x1024">1024 × 1024</option><option value="1536x1024">1536 × 1024</option><option value="1024x1536">1024 × 1536</option></select></label></div>
+          <label class="check-control retouch-consent"><input id="retouch-consent" type="checkbox" required>同意上传图片至 Azure（按量计费）</label>
+        </fieldset>
+        <button class="button button-light" id="retouch-generate" type="submit" disabled><i data-lucide="wand-sparkles"></i><span>生成修图</span></button>
+        <p id="retouch-status" role="status" aria-live="polite">等待选择照片</p>
+      </form>
+    </div>
+  </dialog>
+
   <template id="light-control-template">
     <article class="light-control">
       <header>
@@ -203,7 +221,7 @@
   <script type="module">
     import('./src/main.js').catch((error) => {
       console.error(error);
-      document.querySelector('#loading-state p').textContent = '加载失败，请检查网络并通过本地 HTTP 服务器打开';
+      document.querySelector('#loading-state p').textContent = error.message?.startsWith('无法加载姿势库') ? error.message : '加载失败，请检查网络并通过本地 HTTP 服务器打开';
       document.querySelector('#loading-state span').hidden = true;
       document.querySelector('#status-message').textContent = '摄影棚未就绪';
     });
