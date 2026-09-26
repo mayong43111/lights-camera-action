@@ -49,32 +49,34 @@
     <main class="workspace">
       <aside class="panel panel-left" aria-label="创作工具">
         <section class="tool-section scene-object-section">
-          <div class="section-heading"><span>SCENE</span><h2>场景对象</h2><small id="scene-object-count"></small></div>
           <fieldset id="scene-object-fields">
-            <div class="scene-object-add"><select id="scene-object-type" aria-label="添加对象类型"></select><button class="icon-button" id="scene-object-add" type="button" title="添加到场景" aria-label="添加到场景"><i data-lucide="plus"></i></button></div>
+            <div class="section-heading"><h2>场景对象</h2><small id="scene-object-count"></small><button class="icon-button" id="scene-object-add" type="button" title="添加对象" aria-label="添加对象" aria-haspopup="dialog"><i data-lucide="plus"></i></button></div>
             <div id="scene-object-list" role="group" aria-label="场景对象列表"></div>
             <div class="scene-object-actions"><input id="scene-object-name" aria-label="对象名称" maxlength="80"><button class="icon-button" id="scene-object-copy" type="button" title="复制选中对象" aria-label="复制选中对象"><i data-lucide="copy"></i></button><button class="icon-button" id="scene-object-delete" type="button" title="删除选中对象" aria-label="删除选中对象"><i data-lucide="trash-2"></i></button></div>
+            <button id="scene-object-model" class="selected-model" type="button" aria-haspopup="dialog"><span class="selected-model-preview"><img id="scene-object-model-image" alt="" hidden><i id="scene-object-model-icon" data-lucide="box"></i></span><span id="scene-object-model-name"></span><span id="scene-model-chevron"><i data-lucide="chevrons-up-down"></i></span></button>
             <div class="scene-object-flags"><label><input id="scene-object-visible" type="checkbox" checked>显示</label><label><input id="scene-object-locked" type="checkbox">锁定</label><button class="icon-button" data-object-mode="translate" type="button" title="移动对象" aria-label="移动对象" aria-pressed="true"><i data-lucide="move"></i></button><button class="icon-button" data-object-mode="rotate" type="button" title="旋转对象" aria-label="旋转对象" aria-pressed="false"><i data-lucide="rotate-3d"></i></button></div>
-            <span class="object-transform-label">位置</span><div class="object-transform">
-              <label>X<input id="object-position-x" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 X"></label><label>Y<input id="object-position-y" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Y"></label><label>Z<input id="object-position-z" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Z"></label>
-            </div>
-            <span class="object-transform-label">旋转角度</span><div class="object-transform">
-              <label>X<input id="object-rotation-x" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 X"></label><label>Y<input id="object-rotation-y" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Y"></label><label>Z<input id="object-rotation-z" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Z"></label>
+            <div class="object-transform">
+              <label>位置 X<input id="object-position-x" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 X"></label><label>位置 Y<input id="object-position-y" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Y"></label><label>位置 Z<input id="object-position-z" type="number" min="-1000" max="1000" step="0.05" aria-label="对象位置 Z"></label>
+              <label>旋转 X<input id="object-rotation-x" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 X"></label><label><span id="object-yaw-label">朝向</span><input id="object-rotation-y" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Y"></label><label>旋转 Z<input id="object-rotation-z" type="number" min="-180" max="180" step="0.1" aria-label="对象旋转 Z"></label>
             </div>
             <label class="object-scale">道具缩放<input id="scene-object-scale" type="number" min="0.1" max="5" step="0.1" value="1"></label>
           </fieldset>
         </section>
-        <section class="tool-section" data-person-tools>
-          <div class="section-heading"><span>CAST</span><h2>选择人偶</h2></div>
-          <div class="character-grid" id="character-controls">
+        <dialog class="model-picker" id="scene-model-picker" aria-labelledby="scene-picker-title">
+          <header><h2 id="scene-picker-title">添加对象</h2><button class="icon-button" id="scene-picker-close" type="button" title="关闭选择窗口" aria-label="关闭选择窗口"><i data-lucide="x"></i></button></header>
+          <div id="scene-picker-tabs" class="scene-picker-tabs" role="tablist" aria-label="对象类型"><button type="button" role="tab" data-picker-kind="character" aria-selected="true" aria-controls="character-controls">人物</button><button type="button" role="tab" data-picker-kind="prop" aria-selected="false" aria-controls="prop-controls">道具</button></div>
+          <div class="model-picker-body">
+          <div class="character-grid" id="character-controls" role="group" aria-label="人物模型">
             <button type="button" class="character-button is-active" data-character="pixiv" aria-pressed="true"><img src="./assets/characters/pixiv.jpg" alt="pixiv 人形模特预览"><b>凛</b><span>人形模特</span></button>
             <button type="button" class="character-button" data-character="seed" aria-pressed="false"><img src="./assets/characters/seed.png" alt="Seed-san 风格模特预览"><b>Seed</b><span>风格模特</span></button>
             <button type="button" class="character-button" data-character="mannequin" aria-pressed="false"><img src="./assets/characters/mannequin.png" alt="男性白模正面预览"><b>男性白模</b><span>健硕人形</span></button>
             <button type="button" class="character-button" data-character="mannequinFemale" aria-pressed="false"><img src="./assets/characters/mannequin-female.png" alt="女性白模正面预览"><b>女性白模</b><span>基础人形</span></button>
             <button type="button" class="character-button" data-character="quaternius" aria-pressed="false"><img src="./assets/characters/quaternius-original.png" alt="Quaternius 动画原模正面预览"><b>动画原模</b><span>Quaternius</span></button>
           </div>
+          <div class="prop-grid" id="prop-controls" role="group" aria-label="道具模型" hidden><button type="button" data-prop="chair"><i data-lucide="armchair"></i><span>摄影椅</span></button><button type="button" data-prop="stool"><i data-lucide="circle"></i><span>圆凳</span></button><button type="button" data-prop="plinth"><i data-lucide="box"></i><span>展示台</span></button></div>
           <p class="model-credit" id="model-credit">VRM · 正在加载人偶</p>
-        </section>
+          <p id="scene-picker-status" role="status"></p></div>
+        </dialog>
         <section class="tool-section" data-person-tools>
           <div class="section-heading pose-heading"><span>01</span><h2>姿势库</h2><button class="icon-button" id="pose-expand" type="button" title="展开姿势库" aria-label="展开姿势库" aria-haspopup="dialog"><i data-lucide="expand"></i></button></div>
           <div id="pose-library-home">

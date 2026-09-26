@@ -148,6 +148,7 @@ const poseSaving = createPoseSaveControls({
   announce,
 });
 objectTools = createSceneObjectControls({ objects, defaultActor: newActorSnapshot, onStart: rememberState,
+  replaceCharacter: id => switchCharacter(id),
   onChange: sceneObjectChanged, onBusy: value => { objectOperation = value; syncObjectAvailability(); },
   isBlocked: () => modelLoading || isRestoringState || capture.isRecording, announce,
 });
@@ -357,10 +358,6 @@ function bindInterface() {
   document.querySelector('#framing-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-framing]');
     if (button && !modelLoading && !objects.busy && !isRestoringState) frameCharacter(button.dataset.framing);
-  });
-  document.querySelector('#character-controls').addEventListener('click', (event) => {
-    const button = event.target.closest('[data-character]');
-    if (button && canEditCharacter() && !capture.isRecording) switchCharacter(button.dataset.character);
   });
   document.querySelector('#joint-select').addEventListener('change', (event) => { star.select(event.target.value); syncJointControls(); });
   document.querySelector('#edit-joints').addEventListener('change', (event) => objects.setJointEditing(event.target.checked));

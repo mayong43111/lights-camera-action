@@ -69,7 +69,7 @@ function sceneObjectsFixture(jointPose) {
     mesh.position.y = 1.5;
     group.add(mesh);
     scene.add(group);
-    return { group, id: 'mannequin', vrm: {}, editing: false, pose: structuredClone(jointPose),
+    return { group, id: 'mannequin', vrm: {}, editing: false, height: 0, pose: structuredClone(jointPose),
       async load(id) { counts.loads++; if (counts.fail) throw new Error('Expected model failure'); this.id = id; return true; },
       restorePose(pose) { this.pose = structuredClone(pose); group.rotation.y = pose.rotation; },
       capturePose() { return structuredClone(this.pose); }, setEditing(value) { this.editing = value; }, update() {},
@@ -90,6 +90,82 @@ export async function runTests() {
   };
   const catalog = await loadPoseLibrary();
   const scenePose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0, joints: catalog.poses[0].joints };
+  await test('unified object panel separates add and replace and keeps contextual controls compact', async () => {
+    const { objects } = sceneObjectsFixture(scenePose);
+    const first = objects.active;
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1440px;height:900px;border:0';
+    try {
+      await objects.add({ ...objects.snapshot(first), name: '人物 2' });
+      await objects.add({ ...objects.snapshot(first), name: '人物 3' });
+      objects.select(first.id);
+      const html = new DOMParser().parseFromString(await (await fetch('/')).text(), 'text/html');
+      html.querySelectorAll('script:not([type="importmap"])').forEach(script => script.remove());
+      await new Promise(resolve => { frame.onload = resolve; frame.srcdoc = html.documentElement.outerHTML; document.body.append(frame); });
+      const root = frame.contentDocument;
+      let replacements = 0;
+      frame.contentWindow.options = { objects, defaultActor: model => ({ ...objects.snapshot(first), model }),
+        replaceCharacter: async model => { replacements++; objects.active.character.id = model; return true; },
+        onStart() {}, onChange() {}, onBusy() {}, isBlocked: () => false, announce() {} };
+      const controls = await new Promise((resolve, reject) => {
+        frame.contentWindow.ready = resolve;
+        frame.contentWindow.failed = reject;
+        const script = root.createElement('script');
+        script.type = 'module';
+        script.textContent = "import {createSceneObjectControls} from '/src/scene-object-controls.js';try{window.ready(createSceneObjectControls(window.options));}catch(error){window.failed(error);}";
+        root.body.append(script);
+      });
+      objects.onSelect = controls.update;
+      objects.onChange = controls.update;
+      const fallback = root.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      fallback.id = 'scene-object-model-icon';
+      fallback.setAttribute('hidden', '');
+      root.querySelector('#scene-object-model-icon').replaceWith(fallback);
+      const settle = () => new Promise(resolve => {
+        const observer = new MutationObserver(() => { if (!controls.busy) { observer.disconnect(); resolve(); } });
+        observer.observe(root.body, { subtree: true, attributes: true, childList: true });
+        if (!controls.busy) { observer.disconnect(); resolve(); }
+      });
+      equal(root.querySelectorAll('.object-transform label:not([hidden])').length, 3);
+      assert(root.querySelector('.object-scale').hidden, 'Actor shows irrelevant scale');
+      assert(root.querySelector('.scene-object-section').getBoundingClientRect().height < 400, 'Merged panel too tall');
+      root.querySelector('#scene-object-model').click();
+      equal(root.querySelector('#scene-picker-title').textContent, '更换人偶');
+      root.querySelector('[data-character="pixiv"]').click();
+      await settle();
+      equal(objects.people.length, 3);
+      equal(objects.active.id, first.id);
+      equal(first.character.id, 'pixiv');
+      equal(first.character.capturePose(), scenePose);
+      root.querySelector('#scene-object-add').click();
+      root.querySelector('[data-character="seed"]').click();
+      await settle();
+      equal(objects.people.length, 4);
+      equal(replacements, 1);
+      root.querySelector('#scene-object-add').click();
+      assert(!root.querySelector('#prop-controls').hidden, 'Actor limit should default to props');
+      assert(root.querySelector('[data-character="pixiv"]').disabled, 'Actor limit not enforced');
+      root.querySelector('[data-prop="chair"]').click();
+      await settle();
+      equal(objects.entries.length, 5);
+      equal(root.querySelectorAll('.object-transform label:not([hidden])').length, 6);
+      assert(!root.querySelector('.object-scale').hidden, 'Prop scale missing');
+      assert(!fallback.hasAttribute('hidden'), 'Prop icon remains hidden after Lucide SVG replacement');
+      objects.select(first.id);
+      const lock = root.querySelector('#scene-object-locked');
+      lock.checked = true;
+      lock.dispatchEvent(new frame.contentWindow.Event('change'));
+      assert(root.querySelector('#scene-object-model').disabled, 'Locked actor can be replaced');
+      lock.checked = false;
+      lock.dispatchEvent(new frame.contentWindow.Event('change'));
+      root.querySelector('#scene-object-model').click();
+      objects.select(objects.people[1].id);
+      root.querySelector('[data-character="seed"]').click();
+      await settle();
+      equal(replacements, 1);
+      assert(root.querySelector('#scene-picker-status').textContent, 'Stale replacement not reported');
+    } finally { objects.dispose(); frame.remove(); }
+  });
   await test('scene objects keep independent poses, stable IDs and capture helper state', async () => {
     const { objects, counts } = sceneObjectsFixture(scenePose);
     try {
