@@ -5,6 +5,7 @@ import { createPoseBrowser } from '../src/pose-browser.js';
 import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studio-scene.js';
 import { createCaptureController } from '../src/capture.js';
 import { createPoseStore } from '../src/pose-store.js';
+import { CHARACTERS, validateVrmBytes } from '../src/character.js';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -72,6 +73,19 @@ export async function runTests() {
     return { getItem: () => text, setItem: (key, value) => { text = value; } };
   }
   const savedPose = { format: 'studio-pose', version: 1, units: 'radians', rotation: 0.4, placement: { grounded: false, height: 1.5 }, joints: { head: [0.2, 0.1, 0] } };
+  await test('all Standard poses are built in and categorized without local storage', () => {
+    const clean = createPoseStore(catalog, () => ({ getItem: () => null })).catalog;
+    const imported = clean.poses.filter(pose => pose.source?.pack === 'Universal Animation Library Standard');
+    equal(clean.poses.length, 61);
+    equal(clean.defaultPose, 'warrior');
+    equal(imported.length, 43);
+    equal(new Set(imported.map(pose => pose.source.clip)).size, 43);
+    const counts = Object.fromEntries([...new Set(imported.map(pose => pose.folder))]
+      .map(folder => [folder, imported.filter(pose => pose.folder === folder).length]));
+    equal(Object.values(counts), [2, 6, 7, 7, 3, 8, 6, 4]);
+    assert(imported.every(pose => pose.folder.startsWith('Quaternius · ')
+      && Object.keys(pose.joints).length === 51 && pose.source.license === 'CC0-1.0'), 'incomplete imported metadata');
+  });
   await test('save overrides one preset and preserves source catalog', () => {
     const before = JSON.stringify(catalog);
     const storage = storageFixture();
@@ -159,6 +173,21 @@ export async function runTests() {
       assert(rejected, name);
     });
   }
+  await test('original animation mannequin asset and project', async () => {
+    const response = await fetch(CHARACTERS.quaternius.url);
+    assert(response.ok, 'original mannequin asset missing');
+    const model = validateVrmBytes(await response.arrayBuffer(), false);
+    equal(model.animations?.length ?? 0, 0);
+    equal(model.skins[0].joints.length, 65);
+    equal(model.meshes.flatMap(mesh => mesh.primitives).length, 2);
+    equal(model.materials.map(material => material.name).sort(), ['M_Joints', 'M_Main']);
+    const preview = await createImageBitmap(await (await fetch('/assets/characters/quaternius-original.png')).blob());
+    equal([preview.width, preview.height], [320, 400]);
+    preview.close();
+    const state = createDefaultState(catalog.defaultPose, LIGHT_DEFINITIONS);
+    state.character = 'quaternius';
+    assert(validProject({ version: 1, state }, { ...registry, characters: CHARACTERS }), 'original mannequin project rejected');
+  });
   await test('legacy project and floating pose', () => {
     const state = createDefaultState(catalog.defaultPose, LIGHT_DEFINITIONS);
     for (const light of Object.values(state.lights)) { delete light.height; delete light.depth; }
@@ -247,6 +276,15 @@ export async function runTests() {
     data.poses.push({ id: 'testEntry', name: 'Test Pose', folder: 'Test Folder', joints: { head: [0, 0, 0] } });
     let selected;
     const browser = createPoseBrowser(data, (pose) => { selected = pose.id; }, root);
+    for (const category of new Set(catalog.poses.filter(pose => pose.source).map(pose => pose.folder))) {
+      const control = root.querySelector('#pose-folder');
+      control.value = category;
+      control.dispatchEvent(new Event('change'));
+      const expected = catalog.poses.filter(pose => pose.folder === category);
+      equal(root.querySelectorAll('[data-pose]:not([hidden])').length, expected.length);
+      root.querySelector(`[data-pose="${expected[0].id}"]`).click();
+      equal(selected, expected[0].id);
+    }
     browser.updateCatalog(data);
     browser.updateCatalog(data, { reveal: 'testEntry' });
     equal(root.querySelectorAll('[data-pose]').length, data.poses.length);

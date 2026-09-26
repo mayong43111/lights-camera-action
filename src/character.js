@@ -12,6 +12,7 @@ export const CHARACTERS = {
   seed: { name: 'Seed · 风格模特', url: './assets/characters/seed.vrm', credit: 'Seed-san by VirtualCast, Inc. · VRM Public License 1.0' },
   mannequin: { name: '男性白模 · 健硕人形', url: './assets/characters/mannequin.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
   mannequinFemale: { name: '女性白模 · 基础人形', url: './assets/characters/mannequin-female.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
+  quaternius: { name: '动画原模 · Quaternius', url: './assets/characters/quaternius-original.glb', format: 'gltf', credit: 'Quaternius · Universal Animation Library Standard · CC0' },
   vroidA: { name: 'VRoid A · 时装模特', url: './assets/characters/vroid-a.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
   vroidB: { name: 'VRoid B · 潮流模特', url: './assets/characters/vroid-b.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
   vroidC: { name: 'VRoid C · 造型模特', url: './assets/characters/vroid-c.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },

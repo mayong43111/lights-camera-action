@@ -29,6 +29,24 @@ The official itch.io download was unavailable from this environment, so the fixe
 
 `mannequin.png` and `mannequin-female.png` are 320 x 400 renders of the corresponding models with the same neutral stance, lighting and frontal framing. They contain no studio UI or floor markers and use the same CC0 asset terms.
 
+## Original Universal Animation Library mannequin
+
+- `quaternius-original.glb`: the original orange/purple mannequin from Quaternius Universal Animation Library **Standard**, not Universal Base Characters and not the second animation library.
+- Official pack: https://quaternius.com/packs/universalanimationlibrary.html
+- Official free download: https://quaternius.itch.io/universal-animation-library
+- License: CC0 1.0, https://creativecommons.org/publicdomain/zero/1.0/
+- Downloaded through the user's local HTTP proxy on 2026-09-26. Archive: `Universal Animation Library[Standard].zip`; source member: `Unreal-Godot/UAL1_Standard.glb` (non-root-motion variant).
+- The official GLB contains 43 clips including `A_TPose`. The model-only derivative was generated with Three.js 0.180.0 `GLTFExporter`, using `binary: true` and no exported animations. Its two skinned primitives, 65-bone skin, original vertex data and `M_Main` / `M_Joints` materials are retained. No external texture or animation download is needed at runtime.
+- Size: 629,852 bytes. `quaternius-original.png` is a 320 x 400 front render of this same asset. The existing normalized-humanoid adapter provides 51 editable joints and FK/IK, placement and project support; the model is not a new animation playback feature.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| Official Standard ZIP | `cc73fc4e495b82958207316596317a3f40b9fa38065bde1027937452da537724` |
+| Official source GLB | `69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997` |
+| Model-only derivative | `15257f2763eefeef41f2c544d9093145350fa055a04ca4f9d0aaf3bcf4553e6e` |
+
+The older community mirror inspected during research is **not** the source of this model or the 43 built-in pose samples. Every official Standard clip, including `A_TPose`, has one categorized static sample in `assets/poses/library.json`; entries retain the source clip, timestamp, license and GLB hash. Conversion and validation are documented in [the pose report](../../tests/QUATERNIUS_TRIAL.md).
+
 ## VRoid Studio A / B / C
 
 Status: rejected trial assets, withdrawn from the character picker due to pose and visual-quality issues. Files and IDs are temporarily retained for saved-project compatibility; these models have not passed visual acceptance.
