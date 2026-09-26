@@ -124,7 +124,7 @@ class ImageEditTests(unittest.TestCase):
             identifiers = [pose['id'] for pose in catalog['poses']]
             self.assertEqual(len(identifiers), len(set(identifiers)))
             self.assertIn(catalog['defaultPose'], identifiers)
-        for path in ('/assets/poses/private.json', '/assets/poses/../../.env', '/tests/config.json'):
+        for path in ('/assets/poses/private.json', '/assets/poses/../../.env', '/tests/config.json', '/tests/frontend.test.js'):
             self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404)
 
     def test_dotenv_and_environment_precedence(self):

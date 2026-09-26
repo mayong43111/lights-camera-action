@@ -51,6 +51,41 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
+## 代码结构与扩展
+
+项目仍使用原生 ES 模块，没有新增框架或构建依赖。入口 [src/main.js](src/main.js) 负责装配模块、绑定摄影参数，并协调项目恢复与撤销；其余职责按功能分离：
+
+| 模块 | 职责与扩展入口 |
+| --- | --- |
+| [src/studio-scene.js](src/studio-scene.js) | 无影墙、背景平面、位置标记和灯具工厂；灯光定义集中在 `LIGHT_DEFINITIONS` |
+| [src/capture.js](src/capture.js) | 拍照、录制及清理；通过 `takePhoto`、`toggleRecording`、`isRecording` 接入，新增输出流程在此扩展 |
+| [src/pose-schema.js](src/pose-schema.js) | 标准关节和姿势协议，不依赖渲染或界面 |
+| [src/project-schema.js](src/project-schema.js) | 项目校验与默认状态；新增保存字段时同时更新这里及入口的捕获/恢复逻辑 |
+| [src/pose-library.js](src/pose-library.js) | 数据文件加载与校验，新增姿势只改 JSON |
+| [src/pose-browser.js](src/pose-browser.js) | 分类、搜索、弹窗和选中态，通过回调通知应用，不直接操纵角色 |
+| [src/character.js](src/character.js) | 人偶生命周期与骨骼编辑；IK 和白模适配继续由各自模块负责 |
+| [src/retouch.js](src/retouch.js) | AI 修图界面与请求，摄影控制器通过回调提供原图 |
+
+依赖方向保持为“入口装配 → 功能模块 → 数据协议”，模块不要反向导入入口，也不要传入可任意修改的全局应用对象。控制器每个页面创建一次，各自持有内部状态；需要其他模块完成的工作通过明确回调连接。项目和独立姿势仍使用版本 1，已有 ID 和兼容导出保持不变。加入不兼容字段前应先设计迁移策略。
+
+### 前端回归测试
+
+测试只使用原生浏览器与现有 Python 依赖。启动专用测试服务：
+
+```powershell
+.\.venv\Scripts\python.exe tests/serve_frontend.py --port 4176 --no-browser
+```
+
+在独立浏览器标签打开终端输出的地址，等待人偶加载，在浏览器开发者工具 Console 执行：
+
+```js
+await (await import('/tests/frontend.test.js')).runTests()
+```
+
+成功返回 `passed: 18`；任何断言失败都会抛错。覆盖旧项目与浮空姿势、目录扩展、场景工厂、照片恢复、录制各阶段失败清理、姿势过滤与选择。模拟失败会输出带 `Expected` 的错误日志，这是测试输入，不代表测试失败。测试使用独立 DOM/模拟录制器，不调用 Azure，不下载测试照片或视频。专用服务仅额外开放这一个测试脚本；正常 `server.py` 仍拒绝访问测试目录，`.env` 保护不变。测试结束按 Ctrl+C 停止专用服务。
+
+模块测试之外，修改拍摄、相机或人偶时仍应检查真实 PNG/WebM、项目保存恢复和桌面/手机端画面，不能用模拟断言替代渲染验收。
+
 ## 功能
 
 - 四个可选人偶：两款 VRM 样例、男性白模和女性白模；18 种预设姿势、人物朝向，默认使用瑜伽战士

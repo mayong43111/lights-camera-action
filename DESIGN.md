@@ -94,10 +94,15 @@ Three.js 0.180.0 与 Lucide 0.468.0 通过固定版本 CDN 加载，需要联网
 
 - `index.html`：应用语义结构、控制面板和 import map。
 - `styles.css`：响应式工作台布局和视觉系统。
-- `src/main.js`：场景初始化、灯光、状态绑定与导出。
+- `src/main.js`：应用装配与跨模块协调，保留相机/灯光控制、项目状态捕获恢复和撤销；不再包含几何构建、拍摄录制实现或姿势浏览 DOM。
+- `src/studio-scene.js`：纯场景/灯具工厂及灯光定义，显式接收阴影分辨率，不读取 DOM。
+- `src/capture.js`：独立拍摄控制器，拥有拍摄计数、录制器、计时器、控件锁定与资源清理；通过回调提供照片、状态消息及视口恢复，不直接引用 AI 修图模块。
+- `src/pose-schema.js`：无 DOM/Three.js 依赖的关节定义与姿势协议校验；`character.js` 保留旧导出以兼容调用方。
+- `src/project-schema.js`：无 DOM/Three.js 依赖的项目 v1 校验和默认状态；姿势、角色及灯光目录显式传入，不固定灯具数量。
 - `src/character.js`：VRM 加载、标准化骨骼、关节编辑和姿势格式校验。
 - `src/pose-ik.js`：四肢 CCD 求解、可达距离限制、肘膝限位和端点朝向保持。
-- `src/pose-library.js`：读取及校验姿势 JSON，复用 `validPose` 校验标准关节，生成按钮；拒绝重复 ID、非法角度与缺失默认姿势。数据限制为 2 MB、最多 2000 条，15 秒加载超时。
+- `src/pose-library.js`：读取及校验姿势 JSON，复用 `validPose` 校验标准关节；拒绝重复 ID、非法角度与缺失默认姿势。数据限制为 2 MB、最多 2000 条，15 秒加载超时。
+- `src/pose-browser.js`：姿势按钮、分类导航、过滤、弹窗及选中态；只向外报告选择事件，不修改骨骼或撤销历史。所有动态面板建立后由入口统一转换图标。
 - `assets/poses/library.json`：唯一姿势数据源，包含默认 ID、分类元数据与弧度制关节角度；旧姿势 ID 保持兼容。
 - `src/mannequin.js`：男女白模的源骨骼映射、手臂 T 姿势校准及 VRMHumanoid 标准化驱动。
 - `src/retouch.js`：修图输入、上传授权、请求与原图/结果预览，状态只保留在当前页面。

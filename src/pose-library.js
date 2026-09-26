@@ -1,4 +1,4 @@
-import { validPose } from './character.js';
+import { validPose } from './pose-schema.js';
 
 export function validatePoseLibrary(data) {
   if (data?.version !== 1 || data.units !== 'radians' || !Array.isArray(data.poses)
@@ -31,24 +31,4 @@ export async function loadPoseLibrary() {
   } catch (error) {
     throw new Error(`无法加载姿势库 assets/poses/library.json：${error.message}`);
   }
-}
-
-export function renderPoseButtons(library, container) {
-  const fragment = document.createDocumentFragment();
-  for (const pose of library.poses) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pose-button';
-    button.dataset.pose = pose.id;
-    button.dataset.folder = pose.folder;
-    const icon = document.createElement('i');
-    icon.className = 'pose-glyph';
-    icon.dataset.lucide = pose.icon || 'user-round';
-    icon.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('b');
-    name.textContent = pose.name;
-    button.append(icon, name);
-    fragment.append(button);
-  }
-  container.replaceChildren(fragment);
 }

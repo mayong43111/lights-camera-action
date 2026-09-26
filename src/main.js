@@ -5,13 +5,22 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { Character, CHARACTERS, JOINTS, validPose } from './character.js';
+import { Character, CHARACTERS } from './character.js';
+import { JOINTS, validPose } from './pose-schema.js';
+import { createDefaultState, validProject } from './project-schema.js';
 import { createRetouch } from './retouch.js';
-import { loadPoseLibrary, renderPoseButtons } from './pose-library.js';
+import { loadPoseLibrary } from './pose-library.js';
+import { createPoseBrowser } from './pose-browser.js';
+import { createStudio, createStudioLight, LIGHT_DEFINITIONS as lightDefinitions } from './studio-scene.js';
+import { createCaptureController } from './capture.js';
 
 const poseLibrary = await loadPoseLibrary();
 const poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
-renderPoseButtons(poseLibrary, document.querySelector('#pose-controls'));
+const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
+  rememberState();
+  applyPose(pose.id);
+  announce(`已切换为${pose.name}`);
+});
 
 const viewport = document.querySelector('#viewport');
 const viewportFrame = document.querySelector('#viewport-frame');
@@ -70,14 +79,8 @@ scene.add(studio.group);
 
 const star = new Character(scene, camera, renderer.domElement, controls, onJointChange, rememberState, renderer.capabilities.getMaxAnisotropy());
 
-const lightDefinitions = [
-  { id: 'key', name: '主光', index: 'A', intensity: 7, color: '#fff0d6', position: [-4.2, 4.5, 4.2] },
-  { id: 'fill', name: '辅光', index: 'B', intensity: 3.2, color: '#d8e9ff', position: [4.5, 3.5, 3.3] },
-  { id: 'rim', name: '轮廓光', index: 'C', intensity: 5.5, color: '#ffffff', position: [0.5, 4.8, -3.4] },
-];
-
 const lights = Object.fromEntries(lightDefinitions.map((definition) => {
-  const rig = createStudioLight(definition);
+  const rig = createStudioLight(definition, window.innerWidth < 700 ? 1024 : 2048);
   scene.add(rig.group);
   return [definition.id, rig];
 }));
@@ -86,195 +89,41 @@ scene.add(new THREE.HemisphereLight('#ffffff', '#c8d7e0', 0.45));
 
 let currentPose = poseLibrary.defaultPose;
 let currentAspect = 1.5;
-let takeNumber = 1;
-let recorder = null;
-let recordingStartedAt = 0;
-let recordingTimer = null;
 let history = [];
 let isRestoringState = false;
 let backgroundData = null;
 let backgroundLoadVersion = 0;
 let previousFrameTime = 0;
 let poseCustomized = false;
-let editingBeforeRecording = false;
 let modelLoading = false;
+
+const capture = createCaptureController({
+  renderer, composer, camera, character: star, floorMarks: studio.floorMarks,
+  getAspect: () => currentAspect,
+  isLoading: () => modelLoading,
+  onPhoto: (image, name) => retouch.setPhoto(image, name),
+  onResize: resizeViewport,
+  announce,
+});
+const { takePhoto, toggleRecording } = capture;
 
 applyPose(currentPose, true);
 buildLightControls();
 buildJointControls();
 bindInterface();
+window.lucide?.createIcons();
 updateRigVisibility();
 resizeViewport();
 renderer.setAnimationLoop(render);
 await switchCharacter('pixiv', false);
 document.querySelector('#loading-state').classList.add('is-hidden');
 
-function createStudio() {
-  const group = new THREE.Group();
-  const backdropMaterial = new THREE.MeshStandardMaterial({ color: '#edf4f6', roughness: 0.92, metalness: 0 });
-  const profile = [{ height: 0, depth: 8, normalY: 1, normalZ: 0 }];
-  for (let segment = 0; segment <= 64; segment++) {
-    const angle = segment / 64 * Math.PI / 2;
-    profile.push({ height: 1.2 * (1 - Math.cos(angle)), depth: -3.75 - 1.2 * Math.sin(angle), normalY: Math.cos(angle), normalZ: Math.sin(angle) });
-  }
-  profile.push({ height: 7, depth: -4.95, normalY: 0, normalZ: 1 });
-  const positions = [];
-  const normals = [];
-  const indices = [];
-  profile.forEach((point, row) => {
-    positions.push(-7, point.height, point.depth, 7, point.height, point.depth);
-    normals.push(0, point.normalY, point.normalZ, 0, point.normalY, point.normalZ);
-    if (row < profile.length - 1) {
-      const start = row * 2;
-      indices.push(start, start + 1, start + 2, start + 1, start + 3, start + 2);
-    }
-  });
-  const sweepGeometry = new THREE.BufferGeometry();
-  sweepGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  sweepGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-  sweepGeometry.setIndex(indices);
-  const sweep = new THREE.Mesh(sweepGeometry, backdropMaterial);
-  sweep.name = 'Cyclorama';
-  sweep.receiveShadow = true;
-  group.add(sweep);
-
-  const markMaterial = new THREE.MeshBasicMaterial({ color: '#e65343', side: THREE.DoubleSide });
-  const floorMarks = new THREE.Group();
-  floorMarks.name = 'FloorPositionMarks';
-  group.add(floorMarks);
-  for (let index = 0; index < 4; index += 1) {
-    const mark = new THREE.Mesh(new THREE.PlaneGeometry(index % 2 ? 0.05 : 0.65, index % 2 ? 0.65 : 0.05), markMaterial);
-    mark.rotation.x = -Math.PI / 2;
-    mark.position.set(0, 0.006, 0);
-    floorMarks.add(mark);
-  }
-
-  const photoBackdrop = new THREE.Mesh(new THREE.PlaneGeometry(12, 6.75), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
-  photoBackdrop.position.set(0, 3.375, -4.85);
-  photoBackdrop.visible = false;
-  group.add(photoBackdrop);
-  return { group, material: backdropMaterial, photoBackdrop, floorMarks };
-}
-
-function createStar() {
-  const group = new THREE.Group();
-  group.position.y = 0.29;
-  const joints = {};
-  const skin = new THREE.MeshStandardMaterial({ color: '#b97857', roughness: 0.68 });
-  const suit = new THREE.MeshPhysicalMaterial({ color: '#20272b', roughness: 0.35, metalness: 0.08, clearcoat: 0.25 });
-  const accent = new THREE.MeshStandardMaterial({ color: '#d33f32', roughness: 0.48 });
-  const dark = new THREE.MeshStandardMaterial({ color: '#101111', roughness: 0.55 });
-  const hair = new THREE.MeshStandardMaterial({ color: '#291e1a', roughness: 0.88 });
-
-  const hips = joint('root', group, [0, 1.23, 0]);
-  addMesh(hips, new THREE.CapsuleGeometry(0.28, 0.28, 6, 12), suit, [0, 0.16, 0], [1.05, 1, 0.8]);
-  const torso = joint('torso', hips, [0, 0.38, 0]);
-  addMesh(torso, new THREE.CapsuleGeometry(0.34, 0.62, 8, 16), suit, [0, 0.38, 0], [1.15, 1, 0.72]);
-  addMesh(torso, new THREE.BoxGeometry(0.08, 0.62, 0.03), accent, [0, 0.45, 0.25], [1, 1, 1]);
-
-  const neck = joint('neck', torso, [0, 0.84, 0]);
-  addMesh(neck, new THREE.CylinderGeometry(0.105, 0.12, 0.22, 12), skin, [0, 0.08, 0]);
-  const head = joint('head', neck, [0, 0.23, 0]);
-  addMesh(head, new THREE.SphereGeometry(0.25, 24, 18), skin, [0, 0.18, 0], [0.88, 1.08, 0.9]);
-  const hairCap = addMesh(head, new THREE.SphereGeometry(0.255, 24, 12, 0, Math.PI * 2, 0, Math.PI * 0.58), hair, [0, 0.23, -0.01], [0.92, 1, 0.94]);
-  hairCap.rotation.x = -0.12;
-  addMesh(head, new THREE.SphereGeometry(0.018, 10, 8), dark, [-0.09, 0.2, 0.22]);
-  addMesh(head, new THREE.SphereGeometry(0.018, 10, 8), dark, [0.09, 0.2, 0.22]);
-  addMesh(head, new THREE.BoxGeometry(0.09, 0.015, 0.018), accent, [0, 0.08, 0.23]);
-
-  createArm('left', torso, -1, skin, suit, joints);
-  createArm('right', torso, 1, skin, suit, joints);
-  createLeg('left', hips, -1, skin, suit, dark, joints);
-  createLeg('right', hips, 1, skin, suit, dark, joints);
-
-  group.traverse((object) => {
-    if (object.isMesh) {
-      object.castShadow = true;
-      object.receiveShadow = true;
-    }
-  });
-
-  function joint(name, parent, position) {
-    const node = new THREE.Group();
-    node.position.set(...position);
-    node.userData.basePosition = node.position.clone();
-    parent.add(node);
-    joints[name] = node;
-    return node;
-  }
-
-  function createArm(side, parent, direction, skinMaterial, clothingMaterial, jointMap) {
-    const upper = joint(`${side}UpperArm`, parent, [0.43 * direction, 0.72, 0]);
-    addMesh(upper, new THREE.CapsuleGeometry(0.105, 0.38, 6, 10), clothingMaterial, [0, -0.26, 0]);
-    const lower = joint(`${side}LowerArm`, upper, [0, -0.57, 0]);
-    addMesh(lower, new THREE.CapsuleGeometry(0.085, 0.34, 6, 10), skinMaterial, [0, -0.24, 0]);
-    addMesh(lower, new THREE.SphereGeometry(0.105, 12, 10), skinMaterial, [0, -0.51, 0], [0.8, 1.2, 0.55]);
-    jointMap[`${side}UpperArm`] = upper;
-    jointMap[`${side}LowerArm`] = lower;
-  }
-
-  function createLeg(side, parent, direction, skinMaterial, clothingMaterial, shoeMaterial, jointMap) {
-    const upper = joint(`${side}UpperLeg`, parent, [0.2 * direction, 0.02, 0]);
-    addMesh(upper, new THREE.CapsuleGeometry(0.145, 0.52, 6, 12), clothingMaterial, [0, -0.33, 0]);
-    const lower = joint(`${side}LowerLeg`, upper, [0, -0.72, 0]);
-    addMesh(lower, new THREE.CapsuleGeometry(0.115, 0.5, 6, 12), clothingMaterial, [0, -0.31, 0], [0.9, 1, 0.9]);
-    addMesh(lower, new THREE.CapsuleGeometry(0.13, 0.22, 5, 10), shoeMaterial, [0, -0.66, 0.09], [1, 0.72, 1.65]);
-    jointMap[`${side}UpperLeg`] = upper;
-    jointMap[`${side}LowerLeg`] = lower;
-  }
-
-  return { group, joints };
-}
-
-function addMesh(parent, geometry, material, position = [0, 0, 0], scale = [1, 1, 1]) {
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.set(...position);
-  mesh.scale.set(...scale);
-  parent.add(mesh);
-  return mesh;
-}
-
-function createStudioLight(definition) {
-  const group = new THREE.Group();
-  const light = new THREE.SpotLight(definition.color, definition.intensity * 8, 18, 0.62, 0.72, 1.25);
-  light.position.set(...definition.position);
-  light.castShadow = true;
-  light.shadow.mapSize.set(window.innerWidth < 700 ? 1024 : 2048, window.innerWidth < 700 ? 1024 : 2048);
-  light.shadow.bias = -0.00025;
-  light.shadow.normalBias = 0.015;
-  light.shadow.camera.near = 0.3;
-  light.shadow.camera.far = 18;
-  light.target.position.set(0, 1.6, 0);
-  group.add(light, light.target);
-
-  const standMaterial = new THREE.MeshStandardMaterial({ color: '#272727', metalness: 0.75, roughness: 0.3 });
-  const glowMaterial = new THREE.MeshBasicMaterial({ color: definition.color });
-  const stand = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.04, 3.1, 8), standMaterial);
-  stand.position.set(definition.position[0], 1.55, definition.position[2]);
-  group.add(stand);
-  const fixture = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.58, 0.13), standMaterial);
-  fixture.position.copy(light.position);
-  fixture.lookAt(light.target.position);
-  group.add(fixture);
-  const panel = new THREE.Mesh(new THREE.PlaneGeometry(0.68, 0.42), glowMaterial);
-  panel.position.copy(light.position);
-  panel.lookAt(light.target.position);
-  panel.translateZ(0.071);
-  group.add(panel);
-  return { group, light, stand, fixture, panel, glowMaterial, enabled: true };
-}
-
 function applyPose(name) {
   currentPose = name;
   star.applyAngles(poses[name]);
   poseCustomized = false;
   syncJointControls();
-  document.querySelectorAll('[data-pose]').forEach((button) => {
-    const selected = button.dataset.pose === name;
-    button.classList.toggle('is-active', selected);
-    button.setAttribute('aria-pressed', String(selected));
-    if (selected) document.querySelector('#pose-state').textContent = button.querySelector('b').textContent;
-  });
+  poseBrowser.setSelection(name);
 }
 
 function buildLightControls() {
@@ -311,7 +160,7 @@ function bindInterface() {
   });
   document.querySelector('#character-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-character]');
-    if (button && !modelLoading && !recorder) switchCharacter(button.dataset.character);
+    if (button && !modelLoading && !capture.isRecording) switchCharacter(button.dataset.character);
   });
   document.querySelector('#joint-select').addEventListener('change', (event) => { star.select(event.target.value); syncJointControls(); });
   document.querySelector('#edit-joints').addEventListener('change', (event) => star.setEditing(event.target.checked));
@@ -345,16 +194,6 @@ function bindInterface() {
   document.querySelector('#pose-export').addEventListener('click', () => downloadJson(star.capturePose(), 'studio-pose.json'));
   document.querySelector('#pose-import').addEventListener('click', () => document.querySelector('#pose-input').click());
   document.querySelector('#pose-input').addEventListener('change', importPose);
-  bindPoseLibrary();
-  document.querySelector('#pose-controls').addEventListener('click', (event) => {
-    const button = event.target.closest('[data-pose]');
-    if (!button) return;
-    rememberState();
-    applyPose(button.dataset.pose);
-    document.querySelector('#pose-dialog').close();
-    announce(`已切换为${button.querySelector('b').textContent}`);
-  });
-
   document.querySelector('#backdrop-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-color]');
     if (!button || button.classList.contains('is-active')) return;
@@ -429,13 +268,7 @@ function bindInterface() {
       announce('图片导出失败，请降低分辨率或更换浏览器');
     }
   });
-  document.querySelector('#record-button').addEventListener('click', () => {
-    try { toggleRecording(); } catch (error) {
-      console.error(error);
-      stopRecordingUi();
-      announce('录制失败，当前浏览器或设备不支持此编码');
-    }
-  });
+  document.querySelector('#record-button').addEventListener('click', toggleRecording);
   document.querySelector('#reset-button').addEventListener('click', resetStudio);
   document.querySelector('#undo-button').addEventListener('click', undo);
   window.addEventListener('resize', resizeViewport);
@@ -517,7 +350,7 @@ function setActiveButton(button) {
 }
 
 function resizeViewport() {
-  if (recorder) return;
+  if (capture.isRecording) return;
   const width = Math.max(1, viewport.clientWidth);
   const height = Math.max(1, viewport.clientHeight);
   camera.aspect = width / height;
@@ -540,167 +373,6 @@ function render(time) {
   star.update(delta);
   bokehPass.uniforms.focus.value = camera.position.distanceTo(controls.target);
   composer.render();
-}
-
-function takePhoto({ download = true } = {}) {
-  if (modelLoading || !star.vrm) {
-    announce('人偶正在加载，请稍后再拍摄');
-    return;
-  }
-  if (recorder && recorder.state !== 'inactive') {
-    announce('请先停止录制再导出图片');
-    return;
-  }
-  const width = currentAspect >= 1 ? 1920 : Math.round(1920 * currentAspect);
-  const height = currentAspect >= 1 ? Math.round(1920 / currentAspect) : 1920;
-  const previousSize = renderer.getSize(new THREE.Vector2());
-  const previousRatio = renderer.getPixelRatio();
-  const previousAspect = camera.aspect;
-  const overlay = document.querySelector('.viewfinder');
-  overlay.hidden = true;
-  const wasEditing = star.editing;
-  star.setEditing(false);
-  const marksVisible = studio.floorMarks.visible;
-
-  try {
-  studio.floorMarks.visible = false;
-  renderer.setPixelRatio(1);
-  renderer.setSize(width, height, false);
-  composer.setSize(width, height);
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  star.update(0);
-  composer.render();
-  const dataUrl = renderer.domElement.toDataURL('image/png');
-
-  const name = download ? `lights-camera-take-${String(takeNumber).padStart(2, '0')}.png` : '当前场景.png';
-  if (download) {
-    const link = document.createElement('a');
-    link.download = name;
-    link.href = dataUrl;
-    link.click();
-    retouch.setPhoto(dataUrl, name);
-    takeNumber += 1;
-    document.querySelector('#take-number').textContent = String(takeNumber).padStart(2, '0');
-    announce(`图片已导出：${width} × ${height}`);
-  }
-  return { image: dataUrl, name };
-  } finally {
-  studio.floorMarks.visible = marksVisible;
-  renderer.setPixelRatio(previousRatio);
-  renderer.setSize(previousSize.x, previousSize.y, false);
-  composer.setSize(previousSize.x, previousSize.y);
-  camera.aspect = previousAspect;
-  camera.updateProjectionMatrix();
-  overlay.hidden = false;
-  star.setEditing(wasEditing);
-  }
-}
-
-function toggleRecording() {
-  if (recorder?.state === 'recording') {
-    document.querySelector('#record-button').disabled = true;
-    recorder.stop();
-    return;
-  }
-  if (recorder) return;
-  if (!renderer.domElement.captureStream || !window.MediaRecorder) {
-    announce('当前浏览器不支持视频录制，请使用最新版 Chrome 或 Edge');
-    return;
-  }
-
-  const mimeType = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((type) => MediaRecorder.isTypeSupported(type));
-  if (!mimeType) {
-    announce('当前浏览器不支持 WebM 编码，请使用 Chrome 或 Edge');
-    return;
-  }
-  const chunks = [];
-  startRecordingUi();
-  composer.render();
-  const stream = renderer.domElement.captureStream(30);
-  try {
-    recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
-  } catch (error) {
-    stream.getTracks().forEach((track) => track.stop());
-    recorder = null;
-    throw error;
-  }
-  const activeRecorder = recorder;
-  recorder.addEventListener('dataavailable', (event) => { if (event.data.size) chunks.push(event.data); });
-  recorder.addEventListener('stop', () => {
-    stream.getTracks().forEach((track) => track.stop());
-    const blob = new Blob(chunks, { type: activeRecorder.mimeType });
-    recorder = null;
-    if (!blob.size) {
-      stopRecordingUi();
-      announce('未捕获到视频，请延长录制时间后重试');
-      return;
-    }
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.download = `lights-camera-recording-${Date.now()}.webm`;
-    link.href = url;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    stopRecordingUi();
-    announce('视频已导出为 WebM');
-  });
-  recorder.addEventListener('error', () => {
-    stream.getTracks().forEach((track) => track.stop());
-    recorder = null;
-    stopRecordingUi();
-    announce('视频录制出错，请重试');
-  });
-  try { recorder.start(1000); } catch (error) {
-    stream.getTracks().forEach((track) => track.stop());
-    recorder = null;
-    throw error;
-  }
-  announce('正在录制，可继续调整镜头、姿势和灯光');
-}
-
-function startRecordingUi() {
-  editingBeforeRecording = star.editing;
-  star.setEditing(false);
-  document.querySelector('#edit-joints').disabled = true;
-  document.querySelector('#pose-mode').disabled = true;
-  document.querySelectorAll('[data-character]').forEach((button) => { button.disabled = true; });
-  recordingStartedAt = Date.now();
-  document.querySelector('#record-button').classList.add('is-recording');
-  document.querySelector('#record-label').textContent = '停止录制';
-  document.querySelector('#record-button').setAttribute('aria-label', '停止录制');
-  document.querySelector('#record-button').title = '停止录制';
-  document.querySelector('#photo-button').disabled = true;
-  document.querySelector('#reset-button').disabled = true;
-  document.querySelector('#load-button').disabled = true;
-  document.querySelector('#undo-button').disabled = true;
-  document.querySelectorAll('[data-aspect]').forEach((button) => { button.disabled = true; });
-  document.querySelector('#record-time').textContent = '00:00';
-  document.querySelector('#recording-indicator').hidden = false;
-  recordingTimer = window.setInterval(() => {
-    const elapsed = Math.floor((Date.now() - recordingStartedAt) / 1000);
-    document.querySelector('#record-time').textContent = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
-  }, 250);
-}
-
-function stopRecordingUi() {
-  star.setEditing(editingBeforeRecording);
-  document.querySelector('#edit-joints').disabled = false;
-  document.querySelector('#pose-mode').disabled = false;
-  document.querySelectorAll('[data-character]').forEach((button) => { button.disabled = false; });
-  clearInterval(recordingTimer);
-  document.querySelector('#record-button').disabled = false;
-  document.querySelector('#record-button').classList.remove('is-recording');
-  document.querySelector('#record-label').textContent = '录制视频';
-  document.querySelector('#record-button').setAttribute('aria-label', '录制视频');
-  document.querySelector('#record-button').title = '录制视频';
-  document.querySelector('#photo-button').disabled = false;
-  document.querySelector('#reset-button').disabled = false;
-  document.querySelector('#load-button').disabled = false;
-  document.querySelector('#undo-button').disabled = false;
-  document.querySelectorAll('[data-aspect]').forEach((button) => { button.disabled = false; });
-  resizeViewport();
-  document.querySelector('#recording-indicator').hidden = true;
 }
 
 function captureState() {
@@ -810,12 +482,7 @@ function setRangeValue(selector, value) {
 
 async function resetStudio() {
   rememberState();
-  const defaults = {
-    pose: poseLibrary.defaultPose, backdrop: '#edf4f6', aspect: '1.5',
-    cameraPosition: [0.8, 2.1, 7.5], target: [0, 1.65, 0], focal: '50', exposure: '0.5', dof: '0',
-    lights: Object.fromEntries(lightDefinitions.map((light) => [light.id, { enabled: true, intensity: String(light.intensity), color: light.color, position: String(light.position[0]) }])),
-  };
-  await restoreState(defaults);
+  await restoreState(createDefaultState(poseLibrary.defaultPose, lightDefinitions));
   announce('摄影棚已重置');
 }
 
@@ -886,35 +553,8 @@ async function importBackground(event) {
 }
 
 function saveProject() {
-  const blob = new Blob([JSON.stringify({ version: 1, state: captureState() }, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `studio-${Date.now()}.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadJson({ version: 1, state: captureState() }, `studio-${Date.now()}.json`);
   announce('项目已保存，包含背景图片与摄影参数');
-}
-
-function validProject(project) {
-  const state = project?.state;
-  const finiteRange = (value, min, max) => (typeof value === 'number' || typeof value === 'string') && value !== '' && Number.isFinite(Number(value)) && Number(value) >= min && Number(value) <= max;
-  const vector = (value) => Array.isArray(value) && value.length === 3 && value.every((number) => typeof number === 'number' && Number.isFinite(number));
-  const color = (value) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
-  if (project?.version !== 1 || !state || !Object.hasOwn(poses, state.pose) || !color(state.backdrop)) return false;
-  if (state.character != null && !Object.hasOwn(CHARACTERS, state.character)) return false;
-  if (state.jointPose != null && !validPose(state.jointPose)) return false;
-  if (state.poseCustomized != null && typeof state.poseCustomized !== 'boolean') return false;
-  if (state.removeShadows != null && typeof state.removeShadows !== 'boolean') return false;
-  if (!['1.5', '1.333333', '1', '0.5625'].includes(String(state.aspect)) || !vector(state.cameraPosition) || !vector(state.target)) return false;
-  if (!finiteRange(state.focal, 24, 100) || !finiteRange(state.exposure, 0.125, 2) || !finiteRange(state.dof, 0, 100)) return false;
-  if (!finiteRange(state.rotation ?? 0, -180, 180) || !finiteRange(state.leftArm ?? 0, -90, 90) || !finiteRange(state.rightArm ?? 0, -90, 90)) return false;
-  if (state.background != null && (typeof state.background !== 'string' || !/^data:image\/(png|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(state.background) || state.background.length > 12 * 1024 * 1024)) return false;
-  if (state.autoOrbit != null && typeof state.autoOrbit !== 'boolean' || state.showRigs != null && typeof state.showRigs !== 'boolean') return false;
-  return state.lights && Object.keys(state.lights).length === 3 && lightDefinitions.every(({ id }) => {
-    const light = state.lights[id];
-    return light && typeof light.enabled === 'boolean' && color(light.color) && finiteRange(light.intensity, 0, 12) && finiteRange(light.position, -6, 6) && finiteRange(light.height ?? 3, 1, 6) && finiteRange(light.depth ?? 0, -4, 6);
-  });
 }
 
 async function loadProject(event) {
@@ -924,7 +564,7 @@ async function loadProject(event) {
   try {
     if (file.size > 13 * 1024 * 1024) throw new Error('Project too large');
     const project = JSON.parse(await file.text());
-    if (!validProject(project)) throw new Error('Invalid studio project');
+    if (!validProject(project, { poses, characters: CHARACTERS, lightDefinitions })) throw new Error('Invalid studio project');
     rememberState();
     if (await restoreState(project.state)) announce('项目已恢复');
   } catch (error) {
@@ -986,102 +626,10 @@ function syncJointControls() {
   });
 }
 
-function bindPoseLibrary() {
-  const library = document.querySelector('#pose-library');
-  const folderSelect = document.querySelector('#pose-folder');
-  const folderNav = document.querySelector('#pose-folders');
-  const search = document.querySelector('#pose-search');
-  const clear = document.querySelector('#pose-search-clear');
-  const results = document.querySelector('#pose-controls');
-  const buttons = [...results.querySelectorAll('[data-pose]')];
-  const folders = new Map([['', buttons.length]]);
-  const dialog = document.querySelector('#pose-dialog');
-  const expand = document.querySelector('#pose-expand');
-  for (const button of buttons) {
-    folders.set(button.dataset.folder, (folders.get(button.dataset.folder) ?? 0) + 1);
-    button.setAttribute('aria-pressed', String(button.classList.contains('is-active')));
-    const check = document.createElement('i');
-    check.dataset.lucide = 'check';
-    check.className = 'pose-check';
-    check.setAttribute('aria-hidden', 'true');
-    button.append(check);
-  }
-  folderSelect.replaceChildren();
-  for (const [folder, count] of folders) {
-    const label = folder || '全部姿势';
-    folderSelect.add(new Option(`${label} (${count})`, folder));
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'pose-folder-button';
-    button.dataset.folder = folder;
-    const icon = document.createElement('i');
-    icon.dataset.lucide = folder ? 'folder' : 'layers';
-    icon.setAttribute('aria-hidden', 'true');
-    const name = document.createElement('span');
-    name.textContent = label;
-    const total = document.createElement('small');
-    total.textContent = count;
-    button.append(icon, name, total);
-    button.addEventListener('click', () => {
-      folderSelect.value = folder;
-      updateResults();
-    });
-    folderNav.append(button);
-  }
-  function updateResults() {
-    const query = search.value.trim().toLocaleLowerCase();
-    let visible = 0;
-    for (const button of buttons) {
-      const matchesFolder = !folderSelect.value || button.dataset.folder === folderSelect.value;
-      const matchesSearch = `${button.querySelector('b').textContent} ${button.dataset.folder}`.toLocaleLowerCase().includes(query);
-      button.hidden = !matchesFolder || !matchesSearch;
-      if (!button.hidden) visible++;
-    }
-    folderNav.querySelectorAll('button').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.folder === folderSelect.value)));
-    document.querySelector('#pose-count').textContent = `${folderSelect.value || '全部姿势'} · ${visible} / ${folders.get(folderSelect.value)}`;
-    document.querySelector('#pose-empty').hidden = visible > 0;
-    clear.hidden = !search.value;
-    results.scrollTop = 0;
-  }
-  folderSelect.addEventListener('change', updateResults);
-  search.addEventListener('input', updateResults);
-  clear.addEventListener('click', () => {
-    search.value = '';
-    updateResults();
-    search.focus();
-  });
-  expand.addEventListener('click', () => {
-    document.querySelector('#pose-dialog-body').append(library);
-    dialog.showModal();
-    search.focus();
-  });
-  document.querySelector('#pose-dialog-close').addEventListener('click', () => dialog.close());
-  dialog.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    event.preventDefault();
-    event.stopPropagation();
-    dialog.close();
-  });
-  dialog.addEventListener('close', () => {
-    document.querySelector('#pose-library-home').append(library);
-    expand.focus({ preventScroll: true });
-  });
-  dialog.addEventListener('click', (event) => {
-    const bounds = dialog.getBoundingClientRect();
-    if (event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) dialog.close();
-  });
-  updateResults();
-  window.lucide?.createIcons();
-}
-
 function onJointChange(id, edited = true) {
   if (edited) {
     poseCustomized = true;
-    document.querySelectorAll('[data-pose]').forEach((button) => {
-      button.classList.remove('is-active');
-      button.setAttribute('aria-pressed', 'false');
-    });
-    document.querySelector('#pose-state').textContent = '自定义姿势';
+    poseBrowser.setSelection(null);
   }
   syncJointControls();
 }
