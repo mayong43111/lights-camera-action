@@ -411,8 +411,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=4173)
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--reload', action='store_true')
+    parser.add_argument('--strict-port', action='store_true')
     args = parser.parse_args()
-    for port in range(args.port, min(args.port + 20, 65536)):
+    if args.reload:
+        if not app.config['STUDIO_AUTH_ENABLED']:
+            app.config['STUDIO_ORIGIN'] = f'http://127.0.0.1:{args.port}'
+        if not args.no_browser and not os.environ.get('WERKZEUG_RUN_MAIN'):
+            webbrowser.open(app.config['STUDIO_ORIGIN'])
+        app.run(host='127.0.0.1', port=args.port, debug=False, use_reloader=True,
+                use_debugger=False, threaded=True,
+                exclude_patterns=['*/.studio-data/*', '*/.venv/*', '*/node_modules/*',
+                                  '*/dist/*', '*/test-results/*', '*/.git/*'])
+        return
+    ports = [args.port] if args.strict_port else range(args.port, min(args.port + 20, 65536))
+    for port in ports:
         try:
             server = make_server('127.0.0.1', port, app, threaded=True)
             break

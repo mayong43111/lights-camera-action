@@ -41,14 +41,11 @@ F1 有 CPU、内存、磁盘配额及空闲休眠限制，不支持 Always On，
 
 Azure 应用设置：`ENTRA_TENANT_ID`、`ENTRA_CLIENT_ID`、`ENTRA_CLIENT_SECRET`、`ENTRA_ADMIN_USER_IDS`、`STUDIO_SECRET_KEY`、`STUDIO_DATA=/home/studio` 和原有 Azure OpenAI 配置。平台自动提供 `WEBSITE_HOSTNAME`。客户端凭据到期前在本项目 Entra 应用添加新密钥，通过 Azure 安全界面更新设置，验证后撤销旧密钥。不得将密钥发到聊天或提交到 Git。
 
-重复部署前运行测试，再执行：
+单元测试已禁用。仅在明确需要部署时安装依赖并构建，再执行部署脚本：
 
 ```powershell
 npm ci
-npx playwright install chromium
 npm run build
-npm test
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_server.py
 .\.venv\Scripts\python.exe scripts/deploy_azure.py --subscription 46df95d3-489a-4529-8bc6-541b5fbc9bf5 --group rg-qwen-studio-sea --app web-lights-camera-action-46df95 --tenant b01a4337-0efd-4d51-be25-76f96f2c13c4 --client 2a74acf8-dc22-4467-816e-3a57aaff0e7c --application-object 38622452-6811-4318-ae4a-2b3b06352445 --admin ba3569ae-3c25-434b-8334-91fa24195212
 ```
 

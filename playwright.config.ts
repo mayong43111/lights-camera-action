@@ -18,7 +18,7 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      command: 'npm run dev -- --port 5190 --strictPort',
+      command: 'npm run dev:client -- --port 5190 --strictPort',
       url: 'http://127.0.0.1:5190',
       env: { STUDIO_API_URL: 'http://127.0.0.1:4190' },
       reuseExistingServer: false,

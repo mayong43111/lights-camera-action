@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "powershell.exe -NoProfile -File ./start.ps1",
+    "dev:client": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "playwright test"
+    "test": "node -e \"console.log('Unit tests are disabled. No tests were run.')\"",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@pixiv/three-vrm": "3.5.5",

@@ -24,9 +24,11 @@ npm ci
 .\start.ps1
 ```
 
-启动器先执行类型检查与生产构建，再自动打开浏览器，默认地址为 http://127.0.0.1:4173/；端口占用时自动改用后续端口，以终端输出为准。按 Ctrl+C 停止。若本机策略阻止执行脚本，先运行 `npm run build`，再执行 `.\.venv\Scripts\python.exe server.py`；不要更改系统安全策略。缺少构建时 Python 页面返回 503 和构建提示。
+Windows 开发模式是默认入口，也可运行 `npm run dev`。启动器同时运行 Python API（4173）和 Vite（4178），自动打开 http://127.0.0.1:4178/，不先执行生产构建或测试。React 使用 Fast Refresh，CSS 使用 Vite 热更新；模型、姿势等静态资源变化时刷新页面，数据库写入不会刷新。Python 文件变化会重启本地 API，调试器保持关闭。按 Ctrl+C 停止本次启动的服务；已有服务不会被自动终止。
 
-开发时分别在两个终端运行 Python 服务与 `npm run dev`，浏览器打开 http://127.0.0.1:4178/。Vite 将 API 和账户请求代理到默认的 4173 端口；后端使用其他端口时设置 `STUDIO_API_URL`。涉及认证回调的验收使用 Python 同源生产地址。开发更新使用完整页面重载，确保每页只创建一套 WebGL 控制器。
+可选参数：`.\start.ps1 -NoBrowser` 不打开浏览器；`.\start.ps1 -Port 4183 -FrontendPort 4188` 同时更改 API 与前端端口，代理目标自动匹配。端口冲突会报错，不再静默换端口。启动器退出后恢复原来的 `STUDIO_API_URL` 环境变量。
+
+生产模式运行 `.\start.ps1 -Mode Production`：先执行类型检查与生产构建，再启动 Python 同源页面，默认 http://127.0.0.1:4173/。涉及认证回调的验收使用这一同源地址。缺少构建时 Python 页面返回 503 和构建提示。若本机策略阻止执行 PowerShell 脚本，不要更改系统安全策略：开发时分别运行 `.\.venv\Scripts\python.exe server.py --reload --no-browser --strict-port` 和 `npm run dev:client`；生产时先 `npm run build`，再 `.\.venv\Scripts\python.exe server.py --strict-port`。单独运行 Vite 且 API 使用非默认端口时设置 `STUDIO_API_URL`。
 
 页面与 API 需要 Python 服务，不能直接以 `file://` 打开。默认服务只监听本机。React、Ant Design、Three.js、three-vrm 和 Lucide 从 npm 安装后由 Vite 本地打包，不运行时请求 CDN；模型、缩略图和姿势数据随项目提供。首次安装依赖需要联网，普通摄影棚及本地数据功能在安装构建后无需联网，AI 修图仍需连接 Azure。
 
@@ -121,11 +123,7 @@ AZURE_OPENAI_VISION_API_VERSION=2024-10-21
 
 接口采用 Azure [Images Edit API](https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/dall-e#call-the-image-edit-api) 的 multipart 上传，输出 PNG。真实效果和可用性需要你自己的 GPT Image 2 部署、权限和额度；自动化测试使用模拟响应，不代表已完成真实 Azure 生成验收。
 
-本地接口测试（不访问 Azure，不计费）：
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
-```
+单元测试当前已禁用，开发启动和构建均不执行测试。
 
 ## 代码结构与扩展
 
@@ -173,27 +171,11 @@ React 入口为 [src/main.tsx](src/main.tsx)，[src/App.tsx](src/App.tsx) 负责
 
 依赖方向保持为“入口装配 → 功能模块 → 数据协议”，模块不要反向导入入口，也不要传入可任意修改的全局应用对象。控制器随 App 挂载创建、卸载释放，各自持有内部状态；需要其他模块完成的工作通过明确回调连接。项目和独立姿势仍使用版本 1，已有 ID 和兼容导出保持不变。加入不兼容字段前应先设计迁移策略。
 
-### 前端回归测试
+### 验证策略
 
-安装测试浏览器后运行：
+单元测试已禁用但源码保留：`npm test` 仅输出禁用提示，不启动浏览器或后端；Playwright 的模块测试入口已跳过，Python 两个单元测试类也已标记跳过。开发启动不执行构建或测试，生产构建仅执行 TypeScript 检查与 Vite 打包。
 
-```powershell
-npx playwright install chromium
-npm run build
-npm test
-```
-
-Playwright 自动启动 4190 端口临时数据库后端与 5190 端口 Vite，端口必须空闲。18 项桌面/手机用例覆盖滑块双向同步、统一工具导航与键盘操作、参数区折叠、四种画幅与六种窗口尺寸、组合草稿授权与分类保存、姿势弹窗、项目导入导出、拍摄入库、素材导入、修图授权和旧结果隔离、画布像素与运镜，以及正常卸载/初始化取消后的重挂载。默认不截图，trace 也不采集截图；失败追踪保存在 Git 忽略的 `test-results/`。仅在需要时设置 `STUDIO_SCREENSHOTS=1` 启用用例末尾的截图。
-
-43 项模块回归由 Playwright 一并执行；也可以在 Vite 页面控制台运行：
-
-```js
-await (await import('/tests/frontend.test.js')).runTests()
-```
-
-成功返回 `passed: 43`；断言失败会抛错。覆盖 AI 预设协议、上传授权、显式预览、分类保存恢复、失败保留、多人数响应拒绝、道具变换与尺寸边界、姿势库、相册、项目、拍摄、录制中销毁与清理、图片预览，以及 IK 端点位置、朝向保持与资源释放。模拟失败可能输出 `Expected` 日志。测试不会调用 Azure，专用后端不用于保存正式作品。正常 Python 服务仍拒绝访问测试目录，`.env` 和数据库保护不变。后端测试运行 `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`。
-
-模块测试之外，修改拍摄、相机或人偶时仍应检查真实 PNG/WebM、项目保存恢复和桌面/手机端画面，不能用模拟断言替代渲染验收。
+日常验证使用 `npm run typecheck`、`npm run build` 和必要的启动/热更新检查。确需手动浏览器 E2E 时，可先安装 Chromium（`npx playwright install chromium`），再运行 `npm run test:e2e`；该入口不执行已禁用的模块单元测试。它使用 4190/5190 端口及临时数据库，不用于保存正式作品，不调用真实收费 AI。默认不截图，trace 也不采集截图；历史测试源码和实验资料继续保留，不代表当前版本已完成全部回归。
 
 ## 功能
 

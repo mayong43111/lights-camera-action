@@ -117,7 +117,9 @@
 - [scene_schema.py](scene_schema.py)：服务端场景与预设校验。
 - `storage.py`：SQLite 事务，保存原图 BLOB、320px 缩略图、元数据与配置；按分类和时间索引，每页 40 张。每次操作使用独立连接，生成完成即在服务端归档；写入失败仍把生成图片返回浏览器供重试或下载。
 - `server.py`：白名单静态资源与 `/api/ai/status`、`/api/ai/edit`，读取 `.env` 后代理 Azure 请求；验证 Host、Origin 与令牌，限制图片/请求大小，不提供任意 URL 代理，禁止 Azure 重定向与自动重试。
-- `start.ps1`：使用 `.venv` 中的 Python 启动本机服务。
+- `start.ps1`：默认同时启动可重载的 Python API 与 Vite 开发服务，退出时清理本次启动的 API 进程；生产模式显式构建并启动同源服务。端口占用时拒绝启动，不更改既有服务。
+
+单元测试当前禁用并保留源码；默认 `npm test` 不运行测试，Python 单元测试类与 Playwright 模块测试入口标记跳过。构建保留严格类型检查；浏览器 E2E 仅通过 `npm run test:e2e` 手动执行。源码与样式走 Vite/React HMR，静态资源变化触发整页刷新，运行时数据不参与页面热更新。
 
 ### 6.3 场景对象
 

@@ -12,8 +12,10 @@ export default defineConfig({
         || /^(index\.html|styles\.css|auth\.css)$/.test(path)
         || /^assets\/(characters|poses|shots|vendor)\//.test(path);
       if (!isFrontend) return [];
-      server.ws.send({ type: 'full-reload' });
-      return [];
+      if (path.startsWith('assets/') || path === 'auth.css') {
+        server.ws.send({ type: 'full-reload' });
+        return [];
+      }
     },
     closeBundle() {
       cpSync(resolve('assets'), resolve('dist/assets'), { recursive: true });
@@ -22,8 +24,9 @@ export default defineConfig({
   publicDir: false,
   server: {
     port: 4178,
+    strictPort: true,
     watch: {
-      ignored: ['**/.studio-data/**', '**/.venv/**', '**/dist/**', '**/test-results/**', '**/playwright-report/**'],
+      ignored: ['**/.studio-data/**', '**/.venv/**', '**/dist/**', '**/tests/**', '**/test-results/**', '**/playwright-report/**'],
     },
     fs: {
       deny: ['**/.env', '**/.env.*', '**/*.{crt,pem}', '**/.git/**', '**/.studio-data/**', '**/.venv/**'],
