@@ -8,6 +8,7 @@ import sqlite3
 import uuid
 
 from PIL import Image, ImageOps
+from scene_schema import valid_preset
 
 
 class StorageError(Exception):
@@ -92,17 +93,22 @@ class StudioStore:
                 raise StorageError('not_found', 404)
 
     def settings(self, name):
-        if name not in ('scene', 'retouch'):
+        if name not in ('scene', 'retouch', 'shots'):
             raise StorageError('invalid_request', 400)
         with self.connect() as connection:
             row = connection.execute('SELECT value, revision FROM settings WHERE name = ?', (name,)).fetchone()
             return {'value': json.loads(row['value']), 'revision': row['revision']} if row else {'value': None, 'revision': 0}
 
     def save_settings(self, name, value, revision):
-        if name not in ('scene', 'retouch') or not isinstance(value, dict) or type(revision) is not int or revision < 0:
+        if name not in ('scene', 'retouch', 'shots') or not isinstance(value, dict) or type(revision) is not int or revision < 0:
             raise StorageError('invalid_request', 400)
         if name == 'scene':
             valid = set(value) == {'version', 'state'} and value['version'] == 1 and isinstance(value['state'], dict)
+        elif name == 'shots':
+            valid = (set(value) == {'version', 'items'} and type(value['version']) is int and value['version'] == 1
+                     and isinstance(value['items'], list) and len(value['items']) <= 100
+                     and all(valid_preset(item) for item in value['items'])
+                     and len({item['id'] for item in value['items']}) == len(value['items']))
         else:
             valid = (set(value) == {'prompt', 'quality', 'size', 'referenceId', 'garmentId'}
                      and isinstance(value['prompt'], str) and len(value['prompt']) <= 4000

@@ -17,8 +17,13 @@ import { createPoseStore } from './pose-store.js';
 import { createPoseSaveControls } from './pose-save.js';
 import { createLibraryClient } from './library-client.js';
 import { createLibrary } from './library.js';
+import { createShotProject, loadBuiltInShots } from './shot-presets.js';
+import { createShotBrowser } from './shot-browser.js';
+import { createPropsController } from './props.js';
 
-const poseStore = createPoseStore(await loadPoseLibrary());
+const builtInPoseLibrary = await loadPoseLibrary();
+const builtInShotPresets = await loadBuiltInShots(builtInPoseLibrary);
+const poseStore = createPoseStore(builtInPoseLibrary);
 let poseLibrary = poseStore.catalog;
 let poses = Object.fromEntries(poseLibrary.poses.map((pose) => [pose.id, pose.joints]));
 const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
@@ -117,6 +122,7 @@ const capture = createCaptureController({
   renderer, composer, camera, character: star, floorMarks: studio.floorMarks,
   getAspect: () => currentAspect,
   isLoading: () => modelLoading,
+  setHelpersVisible: visible => props.setHelpersVisible(visible),
   onPhoto: async (image, name) => {
     retouch.setPhoto(image, name);
     announce('正在保存到拍摄相册…');
@@ -136,6 +142,26 @@ const poseSaving = createPoseSaveControls({
   saveAs: (details, snapshot) => saveLibraryPose(snapshot, details),
   announce,
 });
+const props = createPropsController({
+  scene, camera, canvas: renderer.domElement, orbit: controls, root: document.querySelector('#prop-controls'),
+  canPick: () => !star.editing,
+  onSelect: () => document.querySelector('#tab-props').click(),
+  onBeforeChange: rememberState, onChange: scheduleConfiguration,
+  onFrame: () => frameCharacter('scene'),
+  isAvailable: () => !modelLoading && !isRestoringState && !capture.isRecording,
+  announce,
+});
+
+createShotBrowser({
+  root: document.querySelector('#panel-shots'), client: libraryClient,
+  builtIns: builtInShotPresets,
+  isAvailable: () => persistenceReady && !modelLoading && !isRestoringState && !capture.isRecording,
+  apply: async preset => {
+    rememberState();
+    await restoreState(createShotProject(preset).state);
+    announce(`已应用预设“${preset.name}”，可微调或撤销`);
+  },
+});
 
 applyPose(currentPose, true);
 buildLightControls();
@@ -145,7 +171,7 @@ window.lucide?.createIcons();
 updateRigVisibility();
 resizeViewport();
 renderer.setAnimationLoop(render);
-await switchCharacter('pixiv', false);
+await switchCharacter('mannequinFemale', false);
 document.querySelector('#loading-state').classList.add('is-hidden');
 if (poseStore.warning) announce(poseStore.warning);
 try {
@@ -268,6 +294,34 @@ function buildLightControls() {
 }
 
 function bindInterface() {
+  document.querySelectorAll('.panel-tabs').forEach(tablist => {
+    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+    const select = tab => {
+      tabs.forEach(candidate => {
+        const active = candidate === tab;
+        candidate.setAttribute('aria-selected', String(active));
+        candidate.tabIndex = active ? 0 : -1;
+        document.getElementById(candidate.getAttribute('aria-controls')).hidden = !active;
+      });
+      if (tabs.some(candidate => candidate.id === 'tab-props')) {
+        props.setEditing(tab.id === 'tab-props');
+        if (tab.id !== 'tab-poses') {
+          star.setEditing(false);
+          document.querySelector('#edit-joints').checked = false;
+        }
+      }
+    };
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(tab));
+      tab.addEventListener('keydown', event => {
+        const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        select(tabs[next]);
+        tabs[next].focus();
+      });
+    });
+  });
   document.querySelector('#framing-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-framing]');
     if (button && !modelLoading) frameCharacter(button.dataset.framing);
@@ -393,16 +447,17 @@ function bindInterface() {
   controls.addEventListener('start', rememberState);
 }
 
-function frameCharacter(mode) {
+function frameCharacter(mode, shot = null) {
   const bounds = star.getFramingBounds(mode);
   if (!bounds) return;
-  rememberState();
+  if (mode === 'scene') bounds.union(props.getBounds());
+  if (!shot) rememberState();
   controls.autoRotate = false;
   document.querySelector('#auto-orbit').checked = false;
   controls.enableDamping = false;
   controls.update();
   const center = bounds.getCenter(new THREE.Vector3());
-  const direction = camera.position.clone().sub(controls.target).normalize();
+  const direction = shot ? new THREE.Vector3(...shot.direction).normalize() : camera.position.clone().sub(controls.target).normalize();
   if (mode === 'low') {
     direction.y = -0.16;
     direction.normalize();
@@ -416,16 +471,17 @@ function frameCharacter(mode) {
     for (const vertical of [bounds.min.y, bounds.max.y]) {
       for (const depth of [bounds.min.z, bounds.max.z]) {
         const offset = new THREE.Vector3(horizontal, vertical, depth).sub(center);
-        const clearance = Math.max(Math.abs(offset.dot(right)) / horizontalSlope, Math.abs(offset.dot(up)) / verticalSlope);
+        const clearance = Math.max(Math.abs(offset.dot(right)) / (horizontalSlope * (1 - Math.abs(shot?.offset ?? 0))), Math.abs(offset.dot(up)) / verticalSlope);
         distance = Math.max(distance, offset.dot(direction) + clearance * 1.12);
       }
     }
   }
+  center.addScaledVector(right, (shot?.offset ?? 0) * distance * horizontalSlope);
   controls.target.copy(center);
   camera.position.copy(center).addScaledVector(direction, distance);
   controls.update();
   controls.enableDamping = true;
-  announce(`已切换为${{ full: '全身取景', half: '半身取景', face: '面部特写', low: '低机位仰拍' }[mode]}`);
+  announce(`已切换为${{ full: '全身取景', half: '半身取景', face: '面部特写', low: '低机位仰拍', scene: '人物与全部道具取景' }[mode]}`);
 }
 
 function bindRange(inputSelector, outputSelector, update) {
@@ -494,6 +550,7 @@ function render(time) {
 
 function captureState() {
   return {
+    props: props.capture(),
     pose: currentPose,
     poseSaveTarget,
     backdrop: `#${studio.material.color.getHexString()}`,
@@ -542,6 +599,7 @@ async function undo() {
 async function restoreState(state) {
   if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) return false;
   isRestoringState = true;
+  props.restore(state.props ?? []);
   const knownPose = Object.hasOwn(poses, state.pose);
   applyPose(knownPose ? state.pose : poseLibrary.defaultPose);
   studio.material.color.set(state.backdrop);
@@ -556,8 +614,9 @@ async function restoreState(state) {
   setRangeValue('#depth-of-field', state.dof);
   setRangeValue('#star-rotation', state.rotation ?? 0);
   if (state.jointPose) {
-    star.restorePose(state.jointPose);
     setRangeValue('#star-rotation', THREE.MathUtils.radToDeg(state.jointPose.rotation));
+    star.restorePose(state.jointPose);
+    document.querySelector('#rotation-output').value = `${THREE.MathUtils.radToDeg(state.jointPose.rotation).toFixed(1)}°`;
   } else {
     star.setGrounded(true);
     for (const side of ['left', 'right']) {
@@ -760,12 +819,13 @@ function onJointChange(id, edited = true) {
 
 async function switchCharacter(id, recordHistory = true) {
   if (modelLoading || !Object.hasOwn(CHARACTERS, id)) return false;
+  if (!['mannequin', 'mannequinFemale', 'quaternius'].includes(id)) id = 'mannequinFemale';
   if (star.vrm && star.id === id) return true;
   if (recordHistory) rememberState();
   modelLoading = true;
   document.querySelector('#character-controls').setAttribute('aria-busy', 'true');
   document.querySelector('#model-credit').textContent = '正在加载人偶…';
-  const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button', '#pose-save', '#pose-save-as'];
+  const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button', '#pose-save', '#pose-save-as', '#shot-apply'];
   actions.forEach((selector) => { document.querySelector(selector).disabled = true; });
   try {
     await star.load(id);

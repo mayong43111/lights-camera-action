@@ -1,6 +1,6 @@
 import { Vector2 } from 'three';
 
-export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, root = document, Recorder = globalThis.MediaRecorder }) {
+export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, setHelpersVisible = () => {}, root = document, Recorder = globalThis.MediaRecorder }) {
   let takeNumber = 1;
   let recorder = null;
   let recordingTimer = null;
@@ -31,6 +31,7 @@ export function createCaptureController({ renderer, composer, camera, character,
     try {
       overlay.hidden = true;
       character.setEditing(false);
+      setHelpersVisible(false);
       floorMarks.visible = false;
       renderer.setPixelRatio(1);
       renderer.setSize(width, height, false);
@@ -56,18 +57,21 @@ export function createCaptureController({ renderer, composer, camera, character,
       camera.updateProjectionMatrix();
       overlay.hidden = overlayHidden;
       character.setEditing(wasEditing);
+      setHelpersVisible(true);
     }
   }
 
   function startRecordingUi() {
     const wasEditing = character.editing;
-    const lockedControls = [...root.querySelectorAll('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, [data-aspect]')];
+    const lockedControls = [...root.querySelectorAll('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, #shot-apply, #prop-controls input, #prop-controls select, #prop-controls button, [data-aspect]')];
     const disabledStates = lockedControls.map((control) => control.disabled);
     restoreRecordingUi = () => {
       character.setEditing(wasEditing);
+      setHelpersVisible(true);
       lockedControls.forEach((control, index) => { control.disabled = disabledStates[index]; });
     };
     character.setEditing(false);
+    setHelpersVisible(false);
     lockedControls.forEach((control) => { control.disabled = true; });
     const button = root.querySelector('#record-button');
     button.classList.add('is-recording');

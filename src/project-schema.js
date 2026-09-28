@@ -1,7 +1,9 @@
 import { validPose } from './pose-schema.js';
+import { validProps } from './prop-schema.js';
 
 export function createDefaultState(defaultPose, lightDefinitions) {
   return {
+    props: [],
     pose: defaultPose, backdrop: '#edf4f6', aspect: '1.5',
     cameraPosition: [0.8, 2.1, 7.5], target: [0, 1.65, 0], focal: '50', exposure: '0.5', dof: '0',
     lights: Object.fromEntries(lightDefinitions.map((light) => [light.id, {
@@ -17,6 +19,7 @@ export function validProject(project, { poses, characters, lightDefinitions }) {
   const vector = (value) => Array.isArray(value) && value.length === 3 && value.every((number) => typeof number === 'number' && Number.isFinite(number));
   const color = (value) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
   if (project?.version !== 1 || !state || typeof state.pose !== 'string' || !color(state.backdrop)) return false;
+  if (state.props !== undefined && !validProps(state.props)) return false;
   if (!Object.hasOwn(poses, state.pose) && (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(state.pose) || !validPose(state.jointPose))) return false;
   if (state.character != null && !Object.hasOwn(characters, state.character)) return false;
   if (state.jointPose != null && !validPose(state.jointPose)) return false;

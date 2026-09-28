@@ -60,6 +60,129 @@ class ImageEditTests(unittest.TestCase):
                     self.assertEqual(kwargs['files'][1][1][0], 'reference.png')
                     self.assertIn('Image 2', kwargs['data']['prompt'])
 
+    def analysis_result(self):
+        return {'personCount': 1, 'name': '测试单人', 'category': '肖像', 'notes': '模拟响应，非真实 AI 分析。', 'scene': {
+            'jointPose': {'format': 'studio-pose', 'version': 1, 'units': 'radians', 'rotation': 0,
+                          'placement': {'grounded': True, 'height': 0}, 'joints': {'head': [0, 0, 0]}},
+            'cameraPosition': [0, 2, 8], 'target': [0, 1.6, 0], 'focal': 50, 'aspect': '1.5',
+            'exposure': 0.5, 'backdrop': '#edf4f6', 'props': [],
+            'lights': {name: {'enabled': True, 'intensity': 3, 'color': '#ffffff', 'position': 0, 'height': 3, 'depth': 2}
+                       for name in ('key', 'fill', 'rim')}}}
+
+    def analysis_response(self, result=None):
+        return self.azure_response(data={'choices': [{'finish_reason': 'stop', 'message': {
+            'content': json.dumps(self.analysis_result() if result is None else result)}}]})
+
+    def test_analysis_uses_configured_vision_and_returns_valid_scene(self):
+        payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
+        with patch('server.requests.post', return_value=self.analysis_response()) as upstream:
+            result = server.analyze_image(payload, {**self.config, 'deployment': 'vision-deployment'})
+        self.assertEqual(result['scene'], {**self.analysis_result()['scene'], 'backdrop': '#eef2f4'})
+        self.assertTrue(result['id'].startswith('shot-'))
+        args, options = upstream.call_args
+        self.assertIn('/deployments/vision-deployment/chat/completions?', args[0])
+        self.assertEqual(options['json']['messages'][1]['content'][1]['image_url']['url'], self.image)
+        response_format = options['json']['response_format']
+        self.assertEqual(response_format['type'], 'json_schema')
+        self.assertTrue(response_format['json_schema']['strict'])
+        schema = response_format['json_schema']['schema']
+        self.assertEqual(schema['properties']['name']['type'], 'string')
+        self.assertEqual(schema['properties']['category']['type'], 'string')
+        scene_schema = schema['properties']['scene']['anyOf'][0]
+        self.assertEqual(scene_schema['properties']['aspect']['enum'], ['1.5', '1.333333', '1', '0.5625'])
+        self.assertEqual(scene_schema['properties']['backdrop']['enum'], ['#eef2f4'])
+        joint_schema = scene_schema['properties']['jointPose']['properties']['joints']['properties']
+        self.assertEqual(len(joint_schema), 21)
+        self.assertEqual(joint_schema['leftLowerArm']['type'], 'number')
+        self.assertFalse(scene_schema['additionalProperties'])
+        self.assertEqual(set(scene_schema['required']), set(self.analysis_result()['scene']))
+        self.assertFalse(options['allow_redirects'])
+        self.assertNotIn('test-secret', json.dumps(result))
+
+    def test_analysis_maps_anatomical_hinges_without_guessing_hidden_fingers(self):
+        payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
+        response = self.analysis_result()
+        response['scene']['jointPose']['joints'].update({
+            'leftLowerArm': 1.2, 'rightLowerArm': 0.8, 'leftLowerLeg': 0.4, 'rightLowerLeg': 0.6,
+        })
+        with patch('server.requests.post', return_value=self.analysis_response(response)):
+            result = server.analyze_image(payload, self.config)
+        joints = result['scene']['jointPose']['joints']
+        self.assertEqual(joints['leftLowerArm'], [0, -1.2, 0])
+        self.assertEqual(joints['rightLowerArm'], [0, 0.8, 0])
+        self.assertEqual(joints['leftLowerLeg'], [0.4, 0, 0])
+        self.assertEqual(joints['rightLowerLeg'], [0.6, 0, 0])
+        self.assertNotIn('leftIndexProximal', joints)
+        self.assertEqual(response['scene']['jointPose']['joints']['leftLowerArm'], 1.2)
+        for bend in (-0.1, 2.66, True, [0, 1, 0]):
+            response['scene']['jointPose']['joints']['leftLowerArm'] = bend
+            with patch('server.requests.post', return_value=self.analysis_response(response)), self.assertRaises(server.EditError) as raised:
+                server.analyze_image(payload, self.config)
+            self.assertEqual(raised.exception.code, 'invalid_result')
+
+    def test_analysis_rejects_multiple_people_invalid_data_and_missing_consent(self):
+        payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
+        for count in (0, 2, 5):
+            with patch('server.requests.post', return_value=self.analysis_response({'personCount': count})), self.assertRaises(server.EditError) as raised:
+                server.analyze_image(payload, self.config)
+            self.assertEqual(raised.exception.code, 'single_person_required')
+        invalid = self.analysis_result()
+        invalid['scene']['cameraPosition'] = invalid['scene']['target']
+        with patch('server.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
+            server.analyze_image(payload, self.config)
+        self.assertEqual(raised.exception.code, 'invalid_result')
+        invalid = self.analysis_result()
+        invalid['scene']['aspect'] = '0.666667'
+        with patch('server.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
+            server.analyze_image(payload, self.config)
+        self.assertEqual(raised.exception.code, 'invalid_result')
+        with patch('server.requests.post') as upstream:
+            for bad in ({**payload, 'consent': False}, {**payload, 'image': 'https://example.com/photo.png'}):
+                with self.assertRaises(server.EditError):
+                    server.analyze_image(bad, self.config)
+            upstream.assert_not_called()
+
+    def test_analysis_configuration_status_and_protected_route(self):
+        with patch('server.dotenv_values', return_value={'AZURE_OPENAI_VISION_DEPLOYMENT': 'vision-model'}), patch.dict('server.os.environ', {}, clear=True), patch('server.configuration', return_value=self.config):
+            config = server.vision_configuration()
+        self.assertEqual(config['deployment'], 'vision-model')
+        self.assertEqual(config['version'], '2024-10-21')
+        with patch('server.vision_configuration', return_value=config):
+            status = self.client.get('/api/ai/analyze/status', base_url=self.origin)
+            self.assertEqual(set(status.json), {'configured', 'deployment', 'token'})
+            self.assertNotIn('test-secret', status.text)
+            self.assertEqual(self.client.post('/api/ai/analyze', base_url=self.origin, json={}).status_code, 403)
+            with patch('server.requests.post', return_value=self.analysis_response()):
+                response = self.client.post('/api/ai/analyze', base_url=self.origin,
+                                            json={'image': self.image, 'sourceName': 'reference.png', 'consent': True},
+                                            headers={'X-Studio-Token': server.TOKEN})
+                self.assertEqual(response.status_code, 200)
+
+    def test_analysis_errors_never_leak_keys_and_do_not_retry(self):
+        payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
+        for error, expected in ((requests.Timeout('test-secret'), 'azure_timeout'), (requests.ConnectionError('test-secret'), 'azure_network')):
+            with patch('server.requests.post', side_effect=error) as upstream, self.assertRaises(server.EditError) as raised:
+                server.analyze_image(payload, self.config)
+            self.assertEqual(raised.exception.code, expected)
+            self.assertEqual(upstream.call_count, 1)
+        with patch('server.requests.post') as upstream, self.assertRaises(server.EditError) as raised:
+            server.analyze_image(payload, {**self.config, 'configured': False})
+        self.assertEqual(raised.exception.code, 'vision_not_configured')
+        upstream.assert_not_called()
+
+    def test_analysis_presets_persist_with_validation_and_conflict_protection(self):
+        preset = {'id': 'shot-' + 'a' * 32, 'name': '测试', 'category': '肖像', 'notes': '模拟数据',
+                  'sourceName': 'test.png', 'scene': self.analysis_result()['scene'],
+                  'thumbnail': 'data:image/jpeg;base64,AAAA'}
+        value = {'version': 1, 'items': [preset]}
+        self.assertEqual(self.data_request('settings/shots', {'value': value, 'revision': 0}).status_code, 200)
+        self.assertEqual(self.data_request('settings/shots').json['value'], value)
+        self.assertEqual(self.data_request('settings/shots', {'value': value, 'revision': 0}).status_code, 409)
+        for bad in ({'version': 1, 'items': [preset, preset]}, {'version': 1, 'items': [{**preset, 'category': 'unknown'}]},
+                    {'version': 1, 'items': [{**preset, 'thumbnail': 'https://example.com/image.jpg'}]}):
+            self.assertEqual(self.data_request('settings/shots', {'value': bad, 'revision': 1}).status_code, 400)
+        self.assertEqual(self.data_request('settings/shots').json['value'], value)
+
     def test_invalid_inputs_never_call_azure(self):
         invalid = [None, [], {**self.payload, 'prompt': ''}, {**self.payload, 'prompt': 'x' * 4001},
                    {**self.payload, 'image': 'data:image/png;base64,bm90IGFuIGltYWdl'},
@@ -241,7 +364,13 @@ class ImageEditTests(unittest.TestCase):
             identifiers = [pose['id'] for pose in catalog['poses']]
             self.assertEqual(len(identifiers), len(set(identifiers)))
             self.assertIn(catalog['defaultPose'], identifiers)
-        for path in ('/assets/poses/private.json', '/assets/poses/../../.env', '/tests/config.json', '/tests/frontend.test.js'):
+        with self.client.get('/assets/shots/thumbnails.json', base_url=self.origin) as response:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, 'application/json')
+            self.assertEqual(len(response.json), 20)
+            for thumbnail in response.json.values():
+                self.assertTrue(thumbnail.startswith('data:image/jpeg;base64,'))
+        for path in ('/assets/poses/private.json', '/assets/shots/private.json', '/assets/poses/../../.env', '/tests/config.json', '/tests/frontend.test.js'):
             self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404)
 
     def test_vendored_dependencies_are_complete_and_public(self):

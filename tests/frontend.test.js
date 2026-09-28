@@ -7,6 +7,30 @@ import { createCaptureController } from '../src/capture.js';
 import { createPoseStore } from '../src/pose-store.js';
 import { CHARACTERS, validateVrmBytes } from '../src/character.js';
 import { createLibraryClient } from '../src/library-client.js';
+import { SHOT_CATEGORIES, createBuiltInShots, loadBuiltInShots, createShotProject, validShot } from '../src/shot-presets.js';
+import { Scene, Box3, Vector3, PerspectiveCamera } from 'three';
+import { PROP_TYPES, MAX_PROPS, createPropState, validProps } from '../src/prop-schema.js';
+import { createPropsController } from '../src/props.js';
+import { createShotBrowser } from '../src/shot-browser.js';
+
+function shotFixture() {
+  return { id: 'shot-' + 'a'.repeat(32), name: '模拟单人', category: '肖像', notes: '仅测试模拟数据',
+    sourceName: 'fixture.png', thumbnail: 'data:image/jpeg;base64,AAAA', scene: {
+      jointPose: { format: 'studio-pose', version: 1, units: 'radians', rotation: 0,
+        placement: { grounded: true, height: 0 }, joints: { head: [0, 0, 0] } },
+      cameraPosition: [0, 2, 8], target: [0, 1.6, 0], focal: 50, aspect: '1.5', exposure: 0.5, backdrop: '#edf4f6',
+      props: [{ type: 'block', position: [1, 0, 0], rotation: [0, 0, 0], size: [1, 1, 1], color: '#ffffff' }],
+      lights: Object.fromEntries(['key', 'fill', 'rim'].map(id => [id, { enabled: true, intensity: 3, color: '#ffffff', position: 0, height: 3, depth: 2 }])),
+    } };
+}
+
+async function waitUntil(predicate, message = 'timed out waiting for UI state') {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (predicate()) return;
+    await new Promise(requestAnimationFrame);
+  }
+  throw new Error(typeof message === 'function' ? message() : message);
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -65,6 +89,250 @@ export async function runTests() {
     catch (error) { results.push({ name, passed: false, error: error.message }); }
   };
   const catalog = await loadPoseLibrary();
+  await test('props validate dimensions, limits and unique identities', () => {
+    const items = Object.keys(PROP_TYPES).map(createPropState);
+    assert(validProps(items), 'valid props rejected');
+    for (const mutate of [
+      entries => { entries[0].size[0] = 0; },
+      entries => { entries[0].position[1] = Infinity; },
+      entries => { entries[0].rotation[2] = Math.PI + 0.1; },
+      entries => { entries[0].type = 'unknown'; },
+      entries => { entries[1].id = entries[0].id; },
+      entries => { entries[0].color = 'red'; },
+    ]) {
+      const invalid = structuredClone(items);
+      mutate(invalid);
+      assert(!validProps(invalid), 'invalid props accepted');
+    }
+    assert(!validProps(Array.from({ length: MAX_PROPS + 1 }, () => createPropState('block'))), 'prop limit ignored');
+  });
+  await test('prop controller adds, edits, duplicates, deletes and restores real meshes', () => {
+    const root = document.createElement('div');
+    const scene = new Scene();
+    let changes = 0;
+    let available = true;
+    const controller = createPropsController({ scene, root, onBeforeChange() {}, onChange() { changes++; }, onFrame() {}, isAvailable: () => available, announce() {} });
+    try {
+      for (const type of Object.keys(PROP_TYPES)) {
+        root.querySelector('#prop-type').value = type;
+        root.querySelector('#prop-add').click();
+      }
+      const before = controller.capture();
+      equal(before.length, 4);
+      equal(new Set(before.map(item => item.position[0])).size, 4);
+      for (const [index, model] of controller.group.children.entries()) {
+        const bounds = new Box3().setFromObject(model);
+        const size = bounds.getSize(new Vector3()).toArray();
+        assert(size.every((value, axis) => Math.abs(value - before[index].size[axis]) < 0.0001), 'incorrect prop dimensions');
+        assert(Math.abs(bounds.min.y) < 0.0001, 'prop does not rest on floor');
+      }
+      const width = root.querySelector('[data-prop-field="size"][data-axis="0"]');
+      width.value = '2.5'; width.dispatchEvent(new Event('input'));
+      equal(controller.capture()[3].size[0], 2.5);
+      width.value = '0'; width.dispatchEvent(new Event('input'));
+      equal(controller.capture()[3].size[0], 2.5);
+      root.querySelector('#prop-copy').click();
+      equal(controller.capture().length, 5);
+      assert(validProps(controller.capture()), 'duplicate identity after copy');
+      root.querySelector('#prop-delete').click();
+      equal(controller.capture().length, 4);
+      controller.restore(before);
+      equal(controller.capture(), before);
+      let rejected = false;
+      try { controller.restore([{ ...before[0], size: [-1, 1, 1] }]); } catch { rejected = true; }
+      assert(rejected, 'invalid restore accepted');
+      equal(controller.capture(), before);
+      available = false;
+      root.querySelector('#prop-add').click();
+      root.querySelector('#prop-delete').click();
+      equal(controller.capture(), before);
+      controller.restore([]);
+      equal(controller.group.children.length, 0);
+      assert(changes >= 7, 'changes not reported');
+    } finally { controller.dispose(); }
+    equal(scene.children.length, 0);
+  });
+  await test('prop gizmo synchronizes transforms, clamps bounds and restores camera controls', () => {
+    const root = document.createElement('div');
+    const canvas = document.createElement('canvas');
+    const scene = new Scene();
+    const orbit = { enabled: true, autoRotate: true };
+    let history = 0;
+    const controller = createPropsController({ scene, root, canvas, camera: new PerspectiveCamera(), orbit,
+      onBeforeChange() { history++; }, onChange() {}, onFrame() {}, isAvailable: () => true, announce() {} });
+    try {
+      root.querySelector('#prop-type').value = 'block';
+      root.querySelector('#prop-add').click();
+      controller.setEditing(true);
+      const model = controller.gizmo.object;
+      controller.gizmo.dispatchEvent({ type: 'mouseDown' });
+      assert(!orbit.enabled && !orbit.autoRotate, 'orbit not locked');
+      model.position.set(2, 3, 4);
+      model.rotation.set(0.1, 0.2, 0.3);
+      model.scale.set(2, 0, 20);
+      controller.gizmo.dispatchEvent({ type: 'objectChange' });
+      equal(controller.capture()[0].position, [2, 3, 4]);
+      equal(controller.capture()[0].size, [2, 0.02, 10]);
+      equal(root.querySelector('[data-prop-field="position"][data-axis="1"]').value, '3');
+      controller.gizmo.dispatchEvent({ type: 'mouseUp' });
+      assert(orbit.enabled && orbit.autoRotate, 'orbit not restored');
+      equal(history, 2);
+      root.querySelector('[data-prop-mode="rotate"]').click();
+      equal(controller.gizmo.mode, 'rotate');
+      controller.setHelpersVisible(false);
+      assert(!controller.gizmo.object && !controller.gizmo.enabled, 'capture helper visible');
+      controller.setHelpersVisible(true);
+      assert(controller.gizmo.object === model, 'selection not restored');
+      controller.restore([]);
+      assert(!controller.gizmo.object, 'deleted selection attached');
+    } finally { controller.dispose(); }
+    equal(scene.children.length, 0);
+  });
+  await test('project props remain optional and reject unsafe scene data', () => {
+    const state = createDefaultState(catalog.defaultPose, LIGHT_DEFINITIONS);
+    const registry = { poses: { [catalog.defaultPose]: {} }, characters: {}, lightDefinitions: LIGHT_DEFINITIONS };
+    delete state.props;
+    assert(validProject({ version: 1, state }, registry), 'legacy project rejected');
+    state.props = [createPropState('flowers')];
+    assert(validProject({ version: 1, state }, registry), 'prop project rejected');
+    state.props[0].size[1] = 11;
+    assert(!validProject({ version: 1, state }, registry), 'invalid prop project accepted');
+  });
+  await test('twenty authored shots reuse distinct catalog poses and neutral backgrounds', () => {
+    const drafts = createBuiltInShots(catalog);
+    const thumbnails = Object.fromEntries(drafts.map(item => [item.id, shotFixture().thumbnail]));
+    const presets = createBuiltInShots(catalog, thumbnails);
+    equal(presets.length, 20);
+    equal(new Set(presets.map(item => item.id)).size, 20);
+    equal(new Set(presets.map(item => item.sourceName)).size, 20);
+    for (const category of SHOT_CATEGORIES) equal(presets.filter(item => item.category === category).length, 5);
+    for (const preset of presets) {
+      assert(validShot(preset), `invalid authored preset: ${preset.name}`);
+      equal(preset.scene.backdrop, '#eef2f4');
+      equal(preset.scene.props.length, 0);
+    }
+    presets[0].scene.jointPose.joints.head = [1, 1, 1];
+    assert(JSON.stringify(createBuiltInShots(catalog)[0].scene.jointPose.joints.head) !== '[1,1,1]', 'catalog pose was mutated');
+  });
+  await test('bundled shot previews load as twenty distinct JPEG images', async () => {
+    const presets = await loadBuiltInShots(catalog);
+    equal(presets.length, 20);
+    equal(new Set(presets.map(preset => preset.thumbnail)).size, 20);
+    for (const preset of presets) {
+      const image = new Image();
+      image.src = preset.thumbnail;
+      await image.decode();
+      equal(Math.max(image.naturalWidth, image.naturalHeight), 320);
+    }
+  });
+  await test('built-in shots are read-only and remain separate from personal presets', async () => {
+    const root = document.createElement('div');
+    const builtIn = shotFixture();
+    const personal = { ...shotFixture(), id: 'shot-' + 'b'.repeat(32), category: '其他', name: '个人条目' };
+    let saved = { version: 1, items: [personal] };
+    let writes = 0;
+    let applied;
+    const controller = createShotBrowser({ root, builtIns: [builtIn], isAvailable: () => true,
+      apply(item) { applied = item.id; }, confirmDelete: () => true,
+      client: { async settings() { return saved; }, async saveSettings(name, value) { writes++; saved = value; } },
+      request: async () => new Response(JSON.stringify({ configured: false })) });
+    try {
+      await controller.ready;
+      equal(root.querySelector('#shot-select').options.length, 2);
+      assert(root.querySelector('#shot-delete').disabled, 'built-in deletion was enabled');
+      root.querySelector('#shot-delete').click(); equal(writes, 0);
+      root.querySelector('#shot-apply').click(); equal(applied, builtIn.id);
+      const category = root.querySelector('#shot-category');
+      category.value = '其他'; category.dispatchEvent(new Event('change'));
+      equal(root.querySelector('#shot-select').options.length, 1);
+      assert(!root.querySelector('#shot-delete').disabled, 'personal deletion was disabled');
+      root.querySelector('#shot-delete').click();
+      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      equal(saved.items.length, 0); equal(writes, 1);
+      category.value = ''; category.dispatchEvent(new Event('change'));
+      equal(root.querySelector('#shot-select').options.length, 1);
+      equal(root.querySelector('#shot-count').textContent, '内置 1 · 自存 0 / 100');
+      assert(root.querySelector('#shot-source-input'), 'AI upload was removed');
+    } finally { controller.dispose(); }
+  });
+  await test('AI shot presets validate and create independent editable projects', () => {
+    const preset = shotFixture();
+    equal(SHOT_CATEGORIES.length, 4);
+    assert(validShot(preset), 'valid AI preset rejected');
+    const project = createShotProject(preset);
+    equal(project.state.backdrop, '#eef2f4');
+    equal(project.state.background, null);
+    assert(validProject(project, { poses: {}, characters: {}, lightDefinitions: LIGHT_DEFINITIONS }), 'AI project invalid');
+    project.state.props[0].position[0] = 4;
+    equal(preset.scene.props[0].position[0], 1);
+    assert(!validShot({ ...preset, category: 'unknown' }), 'invalid category accepted');
+    assert(!validShot({ ...preset, thumbnail: 'https://example.com/image.png' }), 'remote thumbnail accepted');
+    assert(!validShot({ ...preset, scene: { ...preset.scene, backdrop: 'invalid' } }), 'invalid backdrop accepted');
+    assert(!validShot({ ...preset, scene: { ...preset.scene, cameraPosition: preset.scene.target } }), 'degenerate camera accepted');
+  });
+  await test('AI browser requires consent, previews explicitly, saves categories and retains failed drafts', async () => {
+    const root = document.createElement('div');
+    let saved = null;
+    let calls = 0;
+    let applied = 0;
+    let reject = false;
+    let failSave = false;
+    const options = { root, isAvailable: () => true, apply() { applied++; }, confirmDelete: () => true,
+      client: { async settings() { return saved; }, async saveSettings(name, value) {
+        equal(name, 'shots');
+        if (failSave) throw new Error('settings_conflict');
+        saved = structuredClone(value);
+      } },
+      request: async (url, init) => {
+        if (url.endsWith('/status')) return new Response(JSON.stringify({ configured: true, deployment: 'mock', token: 'test' }));
+        calls++;
+        assert(JSON.parse(init.body).consent === true, 'missing consent');
+        return new Response(JSON.stringify(reject ? { error: 'single_person_required' } : { preset: shotFixture() }), { status: reject ? 422 : 200 });
+      } };
+    let controller = createShotBrowser(options);
+    try {
+      await controller.ready;
+      equal(root.querySelector('#shot-select').options.length, 0);
+      const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2;
+      const blob = await new Promise(resolve => canvas.toBlob(resolve));
+      const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'fixture.png', { type: 'image/png' }));
+      const input = root.querySelector('#shot-source-input'); input.files = transfer.files;
+      input.dispatchEvent(new Event('change'));
+      await waitUntil(() => !root.querySelector('#shot-source-preview').hidden, () => 'first image: ' + root.querySelector('#shot-ai-status').textContent);
+      root.querySelector('#shot-generate').click(); equal(calls, 0);
+      const consent = root.querySelector('#shot-consent'); consent.checked = true; consent.dispatchEvent(new Event('change'));
+      root.querySelector('#shot-generate').click();
+      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      equal(calls, 1); equal(applied, 0); equal(saved, null);
+      assert(!consent.checked && !root.querySelector('#shot-result').hidden, 'result or consent state invalid');
+      root.querySelector('#shot-preview-result').click(); equal(applied, 1);
+      root.querySelector('#shot-name').value = '自定名称';
+      root.querySelector('#shot-result-category').value = '写真集';
+      failSave = true;
+      root.querySelector('#shot-save-result').click();
+      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      assert(!root.querySelector('#shot-result').hidden && saved === null, 'failed save lost draft');
+      failSave = false;
+      root.querySelector('#shot-save-result').click();
+      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      equal(saved.items[0].name, '自定名称'); equal(saved.items[0].category, '写真集');
+      controller.dispose(); controller = createShotBrowser(options); await controller.ready;
+      equal(root.querySelector('#shot-select').options.length, 1);
+      root.querySelector('#shot-category').value = '时尚封面'; root.querySelector('#shot-category').dispatchEvent(new Event('change'));
+      equal(root.querySelector('#shot-select').options.length, 0);
+      root.querySelector('#shot-category').value = ''; root.querySelector('#shot-category').dispatchEvent(new Event('change'));
+      root.querySelector('#shot-delete').click(); await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      equal(saved.items, []);
+      reject = true;
+      const nextTransfer = new DataTransfer(); nextTransfer.items.add(new File([blob], 'fixture.png', { type: 'image/png' }));
+      const nextInput = root.querySelector('#shot-source-input'); nextInput.files = nextTransfer.files; nextInput.dispatchEvent(new Event('change'));
+      await waitUntil(() => !root.querySelector('#shot-source-preview').hidden, () => 'second image: ' + root.querySelector('#shot-ai-status').textContent + ', files=' + nextInput.files.length);
+      const nextConsent = root.querySelector('#shot-consent'); nextConsent.checked = true; nextConsent.dispatchEvent(new Event('change'));
+      root.querySelector('#shot-generate').click(); await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      assert(root.querySelector('#shot-result').hidden, 'multiple-person response produced draft');
+      equal(applied, 1); equal(saved.items, []);
+    } finally { controller.dispose(); }
+  });
   await test('local settings writes are serialized with revision and token', async () => {
     const writes = [];
     const client = createLibraryClient(async (url, options) => {

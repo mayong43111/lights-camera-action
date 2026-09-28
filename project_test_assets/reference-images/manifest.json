@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "collectedOn": "2026-09-28",
+  "purpose": "Single-person reference candidates for configured vision AI; not published magazine covers or photobook scans.",
+  "license": "Pexels License",
+  "licenseUrl": "https://www.pexels.com/license/",
+  "restrictions": "No implied endorsement, offensive depiction, unaltered resale, or redistribution as stock/wallpaper. See the current license and terms.",
+  "selectionBasis": "Source-page single-person descriptions only. Person count must still be checked by the configured vision AI.",
+  "analysisStatus": "discarded_by_user",
+  "analysisResults": [],
+  "qualityNote": "Generated poses were rejected by the user as incorrect and removed. Schema validity did not establish pose accuracy. Original reference images are retained.",
+  "items": [
+    {
+      "file": "pexels-6984663.jpg",
+      "photographer": "SHVETS production",
+      "source": "https://www.pexels.com/photo/stylish-woman-wearing-fur-coat-in-studio-6984663/",
+      "download": "https://images.pexels.com/photos/6984663/pexels-photo-6984663.jpeg?auto=compress&fm=jpg&w=1200&h=1600&fit=max",
+      "sourceTitle": "Stylish woman wearing fur coat in studio"
+    },
+    {
+      "file": "pexels-3153460.jpg",
+      "photographer": "JJ Jordan",
+      "photographerWebsite": "http://see2believe.co.uk",
+      "source": "https://www.pexels.com/photo/woman-in-white-sweetheart-neckline-top-and-gray-flare-pants-3153460/",
+      "download": "https://images.pexels.com/photos/3153460/pexels-photo-3153460.jpeg?auto=compress&fm=jpg&w=1200&h=1600&fit=max",
+      "sourceTitle": "Woman in white sweetheart neckline top and gray flare pants"
+    },
+    {
+      "file": "pexels-18442508.jpg",
+      "photographer": "BD Jewel",
+      "source": "https://www.pexels.com/photo/portrait-of-woman-in-black-and-white-18442508/",
+      "download": "https://images.pexels.com/photos/18442508/pexels-photo-18442508.jpeg?auto=compress&fm=jpg&w=1200&h=1600&fit=max",
+      "sourceTitle": "Portrait of woman in black and white"
+    },
+    {
+      "file": "pexels-33280219.jpg",
+      "photographer": "Mohammad Gharib",
+      "source": "https://www.pexels.com/photo/intense-portrait-of-man-in-black-sunglasses-33280219/",
+      "download": "https://images.pexels.com/photos/33280219/pexels-photo-33280219.jpeg?auto=compress&fm=jpg&w=1200&h=1600&fit=max",
+      "sourceTitle": "Intense portrait of man in black sunglasses"
+    }
+  ]
+}
