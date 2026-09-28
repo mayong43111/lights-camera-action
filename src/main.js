@@ -5,21 +5,21 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { Character, CHARACTERS } from './character.js';
-import { JOINTS, validPose } from './pose-schema.js';
-import { createDefaultState, validProject } from './project-schema.js';
-import { createRetouch } from './retouch.js';
-import { loadPoseLibrary } from './pose-library.js';
-import { createPoseBrowser } from './pose-browser.js';
-import { createStudio, createStudioLight, LIGHT_DEFINITIONS as lightDefinitions } from './studio-scene.js';
-import { createCaptureController } from './capture.js';
-import { createPoseStore } from './pose-store.js';
-import { createPoseSaveControls } from './pose-save.js';
-import { createLibraryClient } from './library-client.js';
-import { createLibrary } from './library.js';
-import { createShotProject, loadBuiltInShots } from './shot-presets.js';
-import { createShotBrowser } from './shot-browser.js';
-import { createPropsController } from './props.js';
+import { Character, CHARACTERS } from './character';
+import { JOINTS, validPose } from './pose-schema';
+import { createDefaultState, validProject } from './project-schema';
+import { createRetouch } from './retouch';
+import { loadPoseLibrary } from './pose-library';
+import { createPoseBrowser } from './pose-browser';
+import { createStudio, createStudioLight, LIGHT_DEFINITIONS as lightDefinitions } from './studio-scene';
+import { createCaptureController } from './capture';
+import { createPoseStore } from './pose-store';
+import { createPoseSaveControls } from './pose-save';
+import { createLibraryClient } from './library-client';
+import { createLibrary } from './library';
+import { createShotProject, loadBuiltInShots } from './shot-presets';
+import { createShotBrowser } from './shot-browser';
+import { createPropsController } from './props';
 
 const builtInPoseLibrary = await loadPoseLibrary();
 const builtInShotPresets = await loadBuiltInShots(builtInPoseLibrary);
@@ -30,6 +30,7 @@ const poseBrowser = createPoseBrowser(poseLibrary, (pose) => {
   rememberState();
   applyPose(pose.id);
   announce(`已切换为${pose.name}`);
+  scheduleConfiguration();
 });
 
 const viewport = document.querySelector('#viewport');
@@ -264,14 +265,13 @@ function saveLibraryPose(snapshot, details = null) {
   poseSaving.update();
   window.lucide?.createIcons();
   announce(`${details ? '已另存' : '已保存'}“${saved.name}”到本机姿势库`);
+  scheduleConfiguration();
 }
 
 function buildLightControls() {
   const container = document.querySelector('#light-controls');
-  const template = document.querySelector('#light-control-template');
   lightDefinitions.forEach((definition) => {
-    const fragment = template.content.cloneNode(true);
-    const article = fragment.querySelector('.light-control');
+    const article = container.querySelector(`[data-light="${definition.id}"]`);
     article.dataset.light = definition.id;
     article.querySelector('.light-index').textContent = definition.index;
     article.querySelector('.light-name').textContent = definition.name;
@@ -289,38 +289,18 @@ function buildLightControls() {
       const label = input.closest('label').textContent.trim();
       input.setAttribute('aria-label', `${definition.name}${label}`);
     });
-    container.append(fragment);
   });
 }
 
 function bindInterface() {
-  document.querySelectorAll('.panel-tabs').forEach(tablist => {
-    const tabs = [...tablist.querySelectorAll('[role="tab"]')];
-    const select = tab => {
-      tabs.forEach(candidate => {
-        const active = candidate === tab;
-        candidate.setAttribute('aria-selected', String(active));
-        candidate.tabIndex = active ? 0 : -1;
-        document.getElementById(candidate.getAttribute('aria-controls')).hidden = !active;
-      });
-      if (tabs.some(candidate => candidate.id === 'tab-props')) {
-        props.setEditing(tab.id === 'tab-props');
-        if (tab.id !== 'tab-poses') {
-          star.setEditing(false);
-          document.querySelector('#edit-joints').checked = false;
-        }
-      }
-    };
-    tabs.forEach((tab, index) => {
-      tab.addEventListener('click', () => select(tab));
-      tab.addEventListener('keydown', event => {
-        const next = { ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length, Home: 0, End: tabs.length - 1 }[event.key];
-        if (next === undefined) return;
-        event.preventDefault();
-        select(tabs[next]);
-        tabs[next].focus();
-      });
-    });
+  window.addEventListener('studio:panel-change', event => {
+    const panel = event.detail;
+    if (!['shots', 'poses', 'props', 'stage'].includes(panel)) return;
+    props.setEditing(panel === 'props');
+    if (panel !== 'poses') {
+      star.setEditing(false);
+      document.querySelector('#edit-joints').checked = false;
+    }
   });
   document.querySelector('#framing-controls').addEventListener('click', (event) => {
     const button = event.target.closest('[data-framing]');
@@ -812,7 +792,7 @@ function onJointChange(id, edited = true) {
     poseCustomized = true;
     poseBrowser.setSelection(null);
     const entry = poseLibrary.poses.find((pose) => pose.id === poseSaveTarget);
-    if (entry) document.querySelector('#pose-state').textContent = `${entry.name} · 未保存`;
+    if (entry) poseBrowser.setCaption(`${entry.name} · 未保存`);
   }
   syncJointControls();
 }

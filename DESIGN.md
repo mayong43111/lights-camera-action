@@ -21,7 +21,7 @@
 - 三个可选人偶（男性白模、女性白模、Quaternius 原模），默认女性白模，可整体旋转、切换 73 种内置姿势并逐关节手动摆姿。保留原有 18 种（瑜伽 10 种）与官方 UAL1 Standard 全部 43 个静态采样，新增 12 个原创服装摄影预设，按电商展示、廓形细节、画册动态分为三组。服装预设在既有 JSON 内使用稳定 fashion ID、source 元数据、弧度关节及显式贴地/朝向，不引入新协议或训练数据依赖。初始及重置使用瑜伽战士；原有预设保留当前高度，新增条目恢复自身的朝向与贴地/浮空设置。
 - AI 单人参考图生成预设：删除四套手写测试组合，不由编程助手分析图片。上传单人照片，由服务端配置的视觉模型输出姿态、镜头、道具和灯光；模型报告非单人或结果不符合协议时拒绝。生成不自动应用或保存，预览与保存需分别确认。预设按时尚封面、写真集、肖像、其他分类，最多 100 项，存入本地 SQLite，带来源文件名与缩略图。结果是近似估计，不是精确摄影重建。
 - 鲜花、剑、枪、方块四类简化静态道具，最多 16 件；底部中心为变换支点，支持位置、旋转、三轴尺寸、主色、复制、删除和场景取景。道具与人物不绑定，无自动握持和碰撞；道具状态进入自动保存、项目 JSON、撤销及拍摄输出。
-- 姿势库采用逻辑文件夹、搜索和 36px 紧凑列表，列表独立滚动；展开窗口在桌面显示文件夹导航与三列姿势，手机显示分类选择和两列姿势。展开与收起复用同一份 DOM，保留过滤条件，选择后关闭；浏览不计入撤销，姿势应用沿用原有保存恢复路径。所有预设的 ID、名称、分类、图标及关节角度统一来自 `assets/poses/library.json`；新增姿势和分类只改数据，刷新生效。界面不直接写回数据文件。
+- 姿势库侧栏采用逻辑文件夹和可搜索下拉框，展开窗口保留文件夹导航、搜索与姿势列表。两种视图共享筛选和选中状态，选中即应用；下拉框关闭时不清空共享搜索条件。浏览不计入撤销，姿势应用沿用原有保存恢复路径。组合面板同样使用可搜索下拉框，选择只更新预览，显式应用才更改场景。所有姿势的 ID、名称、分类、图标及关节角度统一来自 `assets/poses/library.json`；新增姿势和分类只改数据，刷新生效。界面不直接写回数据文件。
 - 51 个标准关节定义，支持身体与手指 XYZ 旋转、身体控制点和旋转环。
 - 手脚 IK 拖拽使用 Three.js CCDIKSolver，带可达距离限制、基本肘膝限位和端点世界朝向保持；结果写回标准姿势角度。IK 不替代 FK：全部关节选择、角度精调和重置始终保留，非 IK 端点仍显示旋转环。
 - 自动贴地可关闭，关闭时固定当前整体高度；手动高度用于浮空和跳跃定格，姿势变化不触发重新贴地，IK 脚部目标不强制抬到地板以上。
@@ -57,22 +57,22 @@
 
 ### 4.1 桌面布局
 
-- 顶部栏：品牌与保存状态、保存配置、导出配置、相册素材、打开、撤销、重置、拍照、AI 修图、视频录制；窄屏允许工具栏换行。
-- 左侧栏：始终显示三个人偶选项，下方按组合、姿势、道具、布景切换标签。
-- 中央视口：实时摄影棚；拖动旋转镜头，滚轮缩放。
-- 右侧栏：镜头、灯光两个标签，分别提供取景预设、摄影参数和三盏灯的精确参数。
-- 底部状态区：摄影参数、录制状态和输出反馈。
+- 顶部栏：品牌、保存状态与项目操作（账户、保存、导出、相册、打开、撤销、重置）。
+- 左侧工具导航：人物、组合、姿势、道具、布景、镜头、灯光，默认组合。支持方向键、Home/End，参数区可折叠；选中工具自动展开。
+- 单侧参数区：显示当前工具，独立滚动。隐藏面板保持挂载，以保留输入和控制器绑定；离开姿势/道具时退出对应场景编辑模式。
+- 主视口：占据剩余空间，按容器实际宽高适配画幅；拖动旋转镜头，滚轮缩放。
+- 视口下方：状态行与独立拍摄栏，保留场次、拍照、录制和 AI 修图入口。
 
 ### 4.2 移动端
 
-侧栏转换为视口下方的连续面板。核心功能不隐藏，但以触摸拖动为主要镜头操作方式。视频与高分辨率输出受设备性能限制。
+视口与拍摄栏在上方，七类工具转换为横向标签，当前参数在下方独立滚动。整体适配动态视口高度，不需要穿过长参数页才能返回拍摄；所有工具保持可访问。视频与高分辨率输出受设备性能限制。
 
 ## 5. 视觉方向
 
 - 摄影棚采用明亮中性工作环境：白色面板、柔白背景、环境补光与三点布光。
 - 人偶保留原始贴图、法线与骨骼，主体使用 MeshPhysicalMaterial；皮肤、头发、衣料和眼部使用不同粗糙度及反光，关闭卡通描边材质，包括与主体共用网格的描边。贴图采用硬件支持范围内最高 8 倍各向异性过滤。模型仍为风格化造型，不等同于写实扫描人物，不额外叠加噪点模拟细节。
 - 后处理渲染目标使用最多 4 倍 MSAA，而不是仅依赖默认画布抗锯齿；聚光灯设置法线阴影偏移以减轻自阴影斑点。
-- 操作强调色使用片场红色；状态使用信号绿和录制红。
+- 拍照与选中工具使用青绿色，录制使用片场红色；中性灰白用于参数区和视口周围。
 - 标题使用高对比展示字体，参数使用窄体技术字体。
 - UI 采用紧凑的专业工具布局，不使用营销落地页、卡片瀑布或游戏 HUD。
 - 灯具、摄影机、场记板和地面标记作为场景语义，而非纯装饰。
@@ -91,38 +91,37 @@
 - Lucide 图标
 - Python 3.10+、Flask 本地服务，Requests 上传 Azure multipart，python-dotenv 读取配置，Pillow 校验图片；依赖隔离在 `.venv`
 
-Three.js 0.180.0、three-vrm 3.5.5 与 Lucide 0.468.0 及其所需模块从本地 `assets/vendor/` 加载，无需 CDN。固定版本 npm 包通过 `http://127.0.0.1:1080` 代理下载并校验完整性，许可证和资源哈希随项目保留；下载脚本为 `scripts/vendor_dependencies.py`。3D 场景可静态渲染；完整的配置、相册、素材和历史持久化依赖本地 Python 服务，普通操作无需外网。AI 修图另需连接 Azure。普通浏览器可能阻止 `file://` 下的模块导入，因此推荐运行 `start.ps1`，通过 HTTP 打开。启动器仅监听 127.0.0.1，无需管理员权限；4173 被占用时自动尝试后续端口。该服务不用于公网部署。
+主应用使用 React、Ant Design、严格 TypeScript 与 Vite，npm 依赖由锁文件固定；Three.js 0.180.0、three-vrm 3.5.5 和 Lucide 0.468.0 的版本保持不变。第三方 vendored JS 与许可证仍保留供独立实验使用，不属于自有代码改写范围。开发前端默认 4178，代理至 4173 的 Python API；生产构建与启动方法见 [README.md](README.md)。配置、相册、素材和历史持久化依赖 Python 服务，普通操作无需外网，AI 修图另需连接 Azure。
 
 ### 6.2 模块边界
 
-- `index.html`：应用语义结构、控制面板和 import map。
-- `styles.css`：响应式工作台布局和视觉系统。
-- `src/main.js`：应用装配与跨模块协调，保留相机/灯光控制、项目状态捕获恢复和撤销；不再包含几何构建、拍摄录制实现或姿势浏览 DOM。
-- `src/studio-scene.js`：纯场景/灯具工厂及灯光定义，显式接收阴影分辨率，不读取 DOM。
-- `src/capture.js`：独立拍摄控制器，拥有拍摄计数、录制器、计时器、控件锁定与资源清理；通过回调提供照片、状态消息及视口恢复，不直接引用 AI 修图模块。
-- `src/pose-schema.js`：无 DOM/Three.js 依赖的关节定义与姿势协议校验；`character.js` 保留旧导出以兼容调用方。
-- `src/project-schema.js`：无 DOM/Three.js 依赖的项目 v1 校验和默认状态；姿势、角色及灯光目录显式传入，不固定灯具数量。
-- `src/shot-presets.js`：AI 预设协议、分类与独立项目快照转换，无内置场景数据。
-- `src/shot-browser.js`：图片读取、授权、分析状态、草稿预览、分类库及显式保存删除；失败不覆盖草稿或现有场景。
-- `scene_schema.py`：服务端场景与预设校验，与前端共同约束关节、相机、道具、灯光和来源元数据。
-- `src/prop-schema.js`：道具类型与状态校验；唯一 ID、有限数值、位置 ±20、旋转 ±π、尺寸 0.02 至 10、最多 16 件。
-- `src/props.js`：道具几何工厂与编辑控制器，Raycaster 点选和 TransformControls 移动/旋转/缩放；与人物编辑互斥，拖动暂停相机，辅助框在拍摄时隐藏。通过回调接入撤销和保存，统一销毁几何、材质与事件监听；项目可选 props 字段缺省为空数组。
-- `src/character.js`：VRM 加载、标准化骨骼、关节编辑和姿势格式校验。
-- `src/pose-ik.js`：四肢 CCD 求解、可达距离限制、肘膝限位和端点朝向保持。
-- `src/pose-library.js`：读取及校验姿势 JSON，复用 `validPose` 校验标准关节；拒绝重复 ID、非法角度与缺失默认姿势。数据限制为 2 MB、最多 2000 条，15 秒加载超时。
-- `src/pose-browser.js`：姿势按钮、分类导航、过滤、弹窗及选中态；只向外报告选择事件，不修改骨骼或撤销历史。所有动态面板建立后由入口统一转换图标。
-- `src/pose-store.js`：以 `studio-pose-library-v1` 保存本地覆盖及新增条目，合并内置目录，校验成功且持久化写入完成后才更新内存；拒绝损坏数据、写入失败和检测到的陈旧页面覆盖。
-- `src/pose-save.js`：保存目标与另存窗口，支持名称和分类校验；库条目保存关节、朝向和 placement，不含摄影参数。导入外部姿势解除覆盖目标，需另存；项目可选 `poseSaveTarget: null` 延续该保护。本地存储按浏览器 origin 隔离，持久化写入不属于场景撤销历史。
-- `assets/poses/library.json`：唯一姿势数据源，包含默认 ID、分类元数据与弧度制关节角度；旧姿势 ID 保持兼容。
-- `src/mannequin.js`：男女白模的源骨骼映射、手臂 T 姿势校准及 VRMHumanoid 标准化驱动。
-- `src/retouch.js`：修图输入、上传授权、请求与原图/结果预览；通过存储客户端保存参数和素材选择，计费授权及即时预览仍为临时状态。
-- `src/library-client.js`：本地数据请求、令牌和配置 revision 写入队列，拒绝陈旧覆盖。
-- `src/library.js`：相册和素材的分类、分页、缩略图、下载、复用及失败重试，不操作 3D 全局状态。
+- [src/main.tsx](src/main.tsx)、[src/App.tsx](src/App.tsx)：React 挂载、主题、认证与启动错误处理。
+- [src/layout/StudioLayout.tsx](src/layout/StudioLayout.tsx)：工具导航、键盘操作、折叠状态与工作区装配；响应式布局集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
+- [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)：项目顶栏、渲染容器与状态、拍摄操作及修图忙碌状态。
+- [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx)：场景与摄影参数视图，保持所有控件 ID 与挂载容器稳定。
+- [src/StudioMarkup.tsx](src/StudioMarkup.tsx)：素材窗口容器与兼容导出；Ant Design 基础控件位于 [src/components/StudioControls.tsx](src/components/StudioControls.tsx)。
+- [src/studio-controller.ts](src/studio-controller.ts)：应用装配、相机灯光控制、项目 v1 捕获恢复与撤销；通过 `createStudioController(signal)` 随 React 实例创建和释放。
+- [src/studio-scene.ts](src/studio-scene.ts)：纯场景与灯具工厂，不读取 DOM。
+- [src/capture.ts](src/capture.ts)：拍摄、录制计时、控件锁定与失败清理；通过回调接入相册。
+- [src/scene-types.ts](src/scene-types.ts)、[src/pose-schema.ts](src/pose-schema.ts)、[src/project-schema.ts](src/project-schema.ts)、[src/prop-schema.ts](src/prop-schema.ts)：共享协议、运行时校验与默认状态。
+- [src/shot-presets.ts](src/shot-presets.ts)、[src/shot-model.ts](src/shot-model.ts)、[src/shot-browser.tsx](src/shot-browser.tsx)：20 组手工组合、授权分析、React 草稿和分类列表；应用与保存均为显式动作。
+- [src/props.tsx](src/props.tsx)：自有道具几何、React 参数视图、TransformControls 变换、数值校验与资源释放。
+- [src/character.ts](src/character.ts)、[src/mannequin.ts](src/mannequin.ts)、[src/pose-ik.ts](src/pose-ik.ts)：VRM 加载与材质适配、白模骨骼映射、FK/IK 和贴地计算；使用第三方 API，不改写第三方库。
+- [src/pose-library.ts](src/pose-library.ts)、[src/pose-store.ts](src/pose-store.ts)：姿势数据加载、校验、本地覆盖与陈旧写入保护。
+- [src/pose-browser.tsx](src/pose-browser.tsx)、[src/pose-save.tsx](src/pose-save.tsx)：React 分类搜索、展开弹窗、选中态及保存；显式触发配置持久化以适配 Portal。
+- [src/retouch.tsx](src/retouch.tsx)、[src/library.tsx](src/library.tsx)、[src/image-preview.tsx](src/image-preview.tsx)：React 修图授权表单、相册素材与大图预览；失败保留、缩放、手势和焦点恢复。修图固定提交快照，旧请求不会覆盖新原图。
+- [src/react-view.tsx](src/react-view.tsx)：`useSyncExternalStore` 快照订阅、Ant Design 主题与 React 子视图卸载。
+- [src/lifetime.ts](src/lifetime.ts)：取消信号与逆序资源清理，管理计时器、动画帧和临时 URL。
+- [src/library-client.ts](src/library-client.ts)、[src/auth-client.ts](src/auth-client.ts)：账户隔离、本地数据接口与 revision 写入队列。
+- [src/dom.ts](src/dom.ts)：必需节点查询，避免缺失节点被静默忽略。
+- [scene_schema.py](scene_schema.py)：服务端场景与预设校验。
 - `storage.py`：SQLite 事务，保存原图 BLOB、320px 缩略图、元数据与配置；按分类和时间索引，每页 40 张。每次操作使用独立连接，生成完成即在服务端归档；写入失败仍把生成图片返回浏览器供重试或下载。
 - `server.py`：白名单静态资源与 `/api/ai/status`、`/api/ai/edit`，读取 `.env` 后代理 Azure 请求；验证 Host、Origin 与令牌，限制图片/请求大小，不提供任意 URL 代理，禁止 Azure 重定向与自动重试。
 - `start.ps1`：使用 `.venv` 中的 Python 启动本机服务。
 
 ### 6.3 场景对象
+
+自有应用源码全部使用严格 TypeScript，未启用 `allowJs`。道具、相册、修图和图片预览由 React 渲染领域状态快照；Three.js 场景运算、原生模态层和文件输入保留命令式 API，相机灯光使用已有控件桥接。App 卸载会取消未完成初始化、停止渲染与录制、移除监听器/观察器、释放 GPU 资源和子视图，认证 fetch 包装与轮询同时清理。测试与独立实验脚本可保留 JavaScript。第三方资源不在迁移范围内。
 
 ```text
 Scene

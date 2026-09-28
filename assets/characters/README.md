@@ -25,7 +25,7 @@ No endorsement by the original creators is implied. Users must follow the permis
 
 The official itch.io download was unavailable from this environment, so the fixed public copy was used. Each model was built from the corresponding `.gltf` and `.bin` files. Meshes and skin weights are retained; external textures were removed, materials replaced with a neutral white surface, and the data packed into a standalone GLB. These are human base meshes, not photorealistic scans or newly authored robots.
 
-`src/mannequin.js` maps the source skeleton, aligns the arm rest pose, and uses three-vrm's normalized humanoid rig for existing FK/IK controls. No original VRM metadata is claimed for these glTF assets.
+[src/mannequin.ts](../../src/mannequin.ts) maps the source skeleton, aligns the arm rest pose, and uses three-vrm's normalized humanoid rig for existing FK/IK controls. No original VRM metadata is claimed for these glTF assets.
 
 `mannequin.png` and `mannequin-female.png` are 320 x 400 renders of the corresponding models with the same neutral stance, lighting and frontal framing. They contain no studio UI or floor markers and use the same CC0 asset terms.
 

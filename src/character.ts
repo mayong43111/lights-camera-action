@@ -1,13 +1,17 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { MToonMaterial, VRM, VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import type { VRMHumanBoneName } from '@pixiv/three-vrm';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import type { JointPose, Vector3Tuple } from './scene-types';
+import { isRecord } from './schema-utils';
 import { LimbIK } from './pose-ik';
 import { createMannequin } from './mannequin';
 import { JOINTS, validPose } from './pose-schema';
 export { JOINTS, validPose } from './pose-schema';
 
-export const CHARACTERS = {
+export const CHARACTERS: Record<string, { name: string; url: string; credit: string; format?: string }> = {
   pixiv: { name: '凛 · 人形模特', url: './assets/characters/pixiv.vrm', credit: 'pixiv Inc. · VRM Public License 1.0' },
   seed: { name: 'Seed · 风格模特', url: './assets/characters/seed.vrm', credit: 'Seed-san by VirtualCast, Inc. · VRM Public License 1.0' },
   mannequin: { name: '男性白模 · 健硕人形', url: './assets/characters/mannequin.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
@@ -18,20 +22,50 @@ export const CHARACTERS = {
   vroidC: { name: 'VRoid C · 造型模特', url: './assets/characters/vroid-c.vrm', credit: 'VRoid / pixiv Inc. · VRoid 示例模型使用条件（非 CC0）' },
 };
 
-export function validateVrmBytes(bytes, requireVrm = true) {
+export function validateVrmBytes(bytes: unknown, requireVrm = true) {
   if (!(bytes instanceof ArrayBuffer) || bytes.byteLength < 20 || bytes.byteLength > 40 * 1024 * 1024) throw new Error('模型必须小于 40 MB');
   const header = new DataView(bytes);
   if (header.getUint32(0, true) !== 0x46546c67 || header.getUint32(4, true) !== 2 || header.getUint32(12, true) > bytes.byteLength - 20 || header.getUint32(16, true) !== 0x4e4f534a) throw new Error('不是有效的 VRM/GLB 文件');
-  const json = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, header.getUint32(12, true))));
-  if (requireVrm && !json.extensions?.VRMC_vrm && !json.extensions?.VRM) throw new Error('该文件不包含 VRM 人形骨骼');
-  for (const resource of [...(json.buffers ?? []), ...(json.images ?? [])]) {
-    if (resource.uri && !resource.uri.startsWith('data:')) throw new Error('请选择素材内嵌的独立 VRM 文件');
+  const json: unknown = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, header.getUint32(12, true))));
+  if (!isRecord(json)) throw new Error('不是有效的 VRM/GLB 文件');
+  const extensions = isRecord(json.extensions) ? json.extensions : {};
+  if (requireVrm && !extensions.VRMC_vrm && !extensions.VRM) throw new Error('该文件不包含 VRM 人形骨骼');
+  for (const resources of [json.buffers ?? [], json.images ?? []]) {
+    if (!Array.isArray(resources)) throw new Error('不是有效的 VRM/GLB 文件');
+    for (const resource of resources) {
+      if (!isRecord(resource) || (resource.uri && (typeof resource.uri !== 'string' || !resource.uri.startsWith('data:')))) throw new Error('请选择素材内嵌的独立 VRM 文件');
+    }
   }
   return json;
 }
 
 export class Character {
-  constructor(scene, camera, canvas, orbit, onChange, onStart, maxAnisotropy = 1) {
+  scene: THREE.Scene;
+  group: THREE.Group;
+  joints: Record<string, THREE.Object3D>;
+  poseAngles: Record<string, Vector3Tuple>;
+  id: string;
+  version: number;
+  editing: boolean;
+  editMode: 'fk' | 'ik';
+  grounded: boolean;
+  height: number;
+  ikDrag: { pointerId: number; plane: THREE.Plane; offset: THREE.Vector3; orbitEnabled: boolean; autoRotate: boolean } | null;
+  canvas: HTMLCanvasElement;
+  orbit: Pick<OrbitControls, 'enabled' | 'autoRotate'>;
+  selected: string;
+  onChange: (id: string, modified?: boolean) => void;
+  maxAnisotropy: number;
+  loader: GLTFLoader;
+  gizmo: TransformControls;
+  helper: THREE.Object3D;
+  markers: THREE.Group;
+  vrm: VRM | null = null;
+  ik: LimbIK | null = null;
+  groundContacts: { mesh: THREE.Mesh; indices: number[] }[] = [];
+  private readonly lifetime = new AbortController();
+
+  constructor(scene: THREE.Scene, camera: THREE.Camera, canvas: HTMLCanvasElement, orbit: Pick<OrbitControls, 'enabled' | 'autoRotate'>, onChange: (id: string, modified?: boolean) => void, onStart: () => void, maxAnisotropy = 1) {
     this.scene = scene;
     this.group = new THREE.Group();
     this.group.name = 'Star';
@@ -65,14 +99,14 @@ export class Character {
     this.gizmo.addEventListener('objectChange', () => {
       const joint = this.joints[this.selected];
       if (!joint) return;
-      const angles = [joint.rotation.x, joint.rotation.y, joint.rotation.z].map((value) => Math.atan2(Math.sin(value), Math.cos(value)));
+      const angles = normalizeAngles(joint.rotation);
       this.setJoint(this.selected, angles);
       onChange(this.selected);
     });
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    let pointerStart;
-    canvas.addEventListener('pointerdown', (event) => { pointerStart = [event.clientX, event.clientY]; });
+    let pointerStart: [number, number] | undefined;
+    canvas.addEventListener('pointerdown', (event) => { pointerStart = [event.clientX, event.clientY]; }, { signal: this.lifetime.signal });
     canvas.addEventListener('pointerup', (event) => {
       if (!this.editing || this.gizmo.axis || !pointerStart || Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]) > 5) return;
       const rect = canvas.getBoundingClientRect();
@@ -80,20 +114,21 @@ export class Character {
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(this.markers.children, false)[0];
       if (hit) { this.select(hit.object.userData.joint); onChange(this.selected, false); }
-    });
+    }, { signal: this.lifetime.signal });
     this.bindIKPointer(canvas, camera, onStart);
   }
 
-  async load(id, bytes) {
+  async load(id: string, bytes?: ArrayBuffer) {
+    this.lifetime.signal.throwIfAborted();
     const version = ++this.version;
     if (!bytes) {
-      const response = await fetch(CHARACTERS[id].url);
+      const response = await fetch(CHARACTERS[id].url, { signal: this.lifetime.signal });
       if (!response.ok) throw new Error(`模型下载失败 (${response.status})`);
       bytes = await response.arrayBuffer();
     }
     validateVrmBytes(bytes, CHARACTERS[id].format !== 'gltf');
     const gltf = await this.loader.parseAsync(bytes, '');
-    let vrm;
+    let vrm: VRM | null | undefined;
     try {
       vrm = gltf.userData.vrm ?? (CHARACTERS[id].format === 'gltf' ? createMannequin(gltf.scene) : null);
     } catch (error) {
@@ -102,9 +137,9 @@ export class Character {
     }
     if (!vrm) { VRMUtils.deepDispose(gltf.scene); throw new Error('无法读取 VRM 人偶'); }
     if (version !== this.version) { VRMUtils.deepDispose(vrm.scene); return false; }
-    const joints = {};
+    const joints: Record<string, THREE.Object3D> = {};
     for (const [id, bone] of JOINTS) {
-      const node = vrm.humanoid.getNormalizedBoneNode(bone);
+      const node = vrm.humanoid.getNormalizedBoneNode(bone as VRMHumanBoneName);
       if (node) joints[id] = node;
     }
     if (!joints.root || !joints.head || !joints.leftFoot || !joints.rightFoot) { VRMUtils.deepDispose(vrm.scene); throw new Error('人偶缺少必要的骨骼'); }
@@ -114,9 +149,9 @@ export class Character {
     const height = box.max.y - box.min.y;
     if (!Number.isFinite(height) || height < 0.01) { VRMUtils.deepDispose(vrm.scene); throw new Error('模型尺寸无效'); }
     vrm.scene.scale.multiplyScalar(3.2 / height);
-    const surfaces = new Map();
+    const surfaces = new Map<MToonMaterial, THREE.MeshPhysicalMaterial>();
     for (const material of vrm.materials ?? []) {
-      if (!material.isMToonMaterial) continue;
+      if (!(material instanceof MToonMaterial)) continue;
       material.shadingToonyFactor = 0;
       material.giEqualizationFactor = 0;
       material.shadeColorFactor.multiplyScalar(0.65);
@@ -126,17 +161,17 @@ export class Character {
       material.needsUpdate = true;
     }
     vrm.scene.traverse((object) => {
-      if (object.isMesh) {
+      if (object instanceof THREE.Mesh) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
-        if (materials.every((material) => material.isMToonMaterial && material.isOutline)) {
+        if (materials.every((material: THREE.Material) => material instanceof MToonMaterial && material.isOutline)) {
           object.visible = false;
           object.castShadow = false;
           return;
         }
-        const replacements = materials.map((material) => {
-          if (!material.isMToonMaterial || material.isOutline) return material;
+        const replacements = materials.map((material: THREE.Material) => {
+          if (!(material instanceof MToonMaterial) || material.isOutline) return material;
           if (!surfaces.has(material)) surfaces.set(material, createPortraitMaterial(material, this.maxAnisotropy));
-          return surfaces.get(material);
+          return surfaces.get(material)!;
         });
         object.material = Array.isArray(object.material) ? replacements : replacements[0];
         object.castShadow = true;
@@ -144,40 +179,30 @@ export class Character {
         object.frustumCulled = false;
       }
     });
-    this.gizmo.detach();
-    this.finishIKDrag();
-    this.ik?.dispose();
-    if (this.vrm) {
-      this.group.remove(this.vrm.scene);
-      for (const material of this.vrm.materials ?? []) {
-        for (const value of Object.values(material)) if (value?.isTexture) value.dispose();
-        material.dispose();
-      }
-      VRMUtils.deepDispose(this.vrm.scene);
-    }
+    this.releaseModel();
     this.vrm = vrm;
     this.id = id;
     this.joints = joints;
     this.group.add(vrm.scene);
-    const contactBones = new Set();
-    for (const name of ['leftLowerLeg', 'rightLowerLeg']) {
+    const contactBones = new Set<THREE.Object3D>();
+    for (const name of ['leftLowerLeg', 'rightLowerLeg'] as const) {
       vrm.humanoid.getRawBoneNode(name)?.traverse((bone) => contactBones.add(bone));
     }
     this.groundContacts = [];
     vrm.scene.traverse((mesh) => {
-      if (!mesh.isMesh || !mesh.visible) return;
+      if (!(mesh instanceof THREE.Mesh) || !mesh.visible) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      if (!materials.some((material) => material.visible && !material.isOutline)) return;
-      const indices = [];
+      if (!materials.some((material: THREE.Material) => material.visible && !(material instanceof MToonMaterial && material.isOutline))) return;
+      const indices: number[] = [];
       const weights = mesh.geometry.getAttribute('skinWeight');
       const bones = mesh.geometry.getAttribute('skinIndex');
       let attachedToFoot = false;
-      for (let parent = mesh; parent; parent = parent.parent) {
+      for (let parent: THREE.Object3D | null = mesh; parent; parent = parent.parent) {
         if (contactBones.has(parent)) attachedToFoot = true;
       }
       for (let index = 0; index < mesh.geometry.getAttribute('position').count; index++) {
         let contact = attachedToFoot;
-        if (mesh.isSkinnedMesh && weights && bones) {
+        if (mesh instanceof THREE.SkinnedMesh && weights && bones) {
           for (let component = 0; component < weights.itemSize; component++) {
             if (weights.getComponent(index, component) > 0
               && contactBones.has(mesh.skeleton.bones[bones.getComponent(index, component)])) contact = true;
@@ -189,7 +214,7 @@ export class Character {
     });
     this.applyAngles(this.poseAngles);
     this.ik = new LimbIK(joints, this.scene);
-    for (const marker of [...this.markers.children]) { marker.geometry.dispose(); marker.material.dispose(); this.markers.remove(marker); }
+    for (const marker of this.jointMarkers) { marker.geometry.dispose(); marker.material.dispose(); this.markers.remove(marker); }
     for (const [id] of JOINTS.slice(0, 21)) {
       if (!joints[id]) continue;
       const marker = new THREE.Mesh(new THREE.SphereGeometry(0.047, 12, 8), new THREE.MeshBasicMaterial({ color: '#228e94', depthTest: false, transparent: true, opacity: 0.85 }));
@@ -202,7 +227,40 @@ export class Character {
     return true;
   }
 
-  applyAngles(angles) {
+  get jointMarkers() {
+    return this.markers.children.filter((marker): marker is THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial> => marker instanceof THREE.Mesh && marker.material instanceof THREE.MeshBasicMaterial);
+  }
+
+  private releaseModel() {
+    this.gizmo.detach();
+    this.finishIKDrag();
+    this.ik?.dispose();
+    this.ik = null;
+    if (this.vrm) {
+      this.group.remove(this.vrm.scene);
+      for (const material of this.vrm.materials ?? []) {
+        for (const value of Object.values(material)) if (value instanceof THREE.Texture) value.dispose();
+        material.dispose();
+      }
+      VRMUtils.deepDispose(this.vrm.scene);
+    }
+    this.vrm = null;
+    this.groundContacts = [];
+  }
+
+  dispose() {
+    if (this.lifetime.signal.aborted) return;
+    this.version++;
+    this.lifetime.abort();
+    this.releaseModel();
+    this.gizmo.dispose();
+    for (const marker of this.jointMarkers) { marker.geometry.dispose(); marker.material.dispose(); }
+    this.markers.clear();
+    this.joints = {};
+    this.scene.remove(this.group, this.helper, this.markers);
+  }
+
+  applyAngles(angles: Record<string, Vector3Tuple>) {
     this.finishIKDrag();
     this.poseAngles = Object.fromEntries(JOINTS.map(([id]) => [id, [...(angles[id] ?? [0, 0, 0])]]));
     for (const [id, joint] of Object.entries(this.joints)) {
@@ -210,26 +268,26 @@ export class Character {
     }
   }
 
-  setJoint(id, angles) {
+  setJoint(id: string, angles: Vector3Tuple) {
     if (!this.poseAngles[id]) return;
     this.poseAngles[id] = [...angles];
     this.joints[id]?.rotation.set(...angles);
   }
 
-  select(id) {
+  select(id: string) {
     this.selected = this.joints[id] ? id : 'head';
     const rotate = this.editMode === 'fk' || !this.ik?.chains.has(this.selected);
     this.gizmo.enabled = this.editing && rotate;
     if (this.editing && rotate && this.joints[this.selected]) this.gizmo.attach(this.joints[this.selected]);
     else this.gizmo.detach();
-    this.markers.children.forEach((marker) => {
+    this.jointMarkers.forEach((marker) => {
       marker.visible = true;
       marker.scale.setScalar(this.editMode === 'ik' && this.ik?.chains.has(marker.userData.joint) ? 2 : 1);
       marker.material.color.set(marker.userData.joint === this.selected ? '#e35433' : '#228e94');
     });
   }
 
-  setEditing(value) {
+  setEditing(value: boolean) {
     if (!value) this.finishIKDrag();
     this.editing = value;
     this.markers.visible = value;
@@ -237,29 +295,29 @@ export class Character {
     this.select(this.selected);
   }
 
-  setEditMode(mode) {
-    if (!['fk', 'ik'].includes(mode)) return;
+  setEditMode(mode: string) {
+    if (mode !== 'fk' && mode !== 'ik') return;
     this.finishIKDrag();
     this.editMode = mode;
     this.setEditing(this.editing);
   }
 
-  isJointSelectable(id) {
+  isJointSelectable(id: string) {
     return !!this.joints[id];
   }
 
-  solveIK(id, target) {
+  solveIK(id: string, target: THREE.Vector3) {
     for (const jointId of this.ik?.solve(id, target) ?? []) {
       const joint = this.joints[jointId];
-      this.poseAngles[jointId] = [joint.rotation.x, joint.rotation.y, joint.rotation.z].map((value) => Math.atan2(Math.sin(value), Math.cos(value)));
+      this.poseAngles[jointId] = normalizeAngles(joint.rotation);
     }
     this.onChange(this.selected);
   }
 
-  bindIKPointer(canvas, camera, onStart) {
+  bindIKPointer(canvas: HTMLCanvasElement, camera: THREE.Camera, onStart: () => void) {
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
-    const pointOnPlane = (event, plane) => {
+    const pointOnPlane = (event: PointerEvent, plane: THREE.Plane) => {
       const rect = canvas.getBoundingClientRect();
       pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
       raycaster.setFromCamera(pointer, camera);
@@ -291,22 +349,22 @@ export class Character {
       canvas.setPointerCapture(event.pointerId);
       canvas.style.cursor = 'grabbing';
       this.onChange(this.selected, false);
-    }, true);
+    }, { capture: true, signal: this.lifetime.signal });
     canvas.addEventListener('pointermove', (event) => {
       if (!this.ikDrag || event.pointerId !== this.ikDrag.pointerId) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       const point = pointOnPlane(event, this.ikDrag.plane);
       if (point) this.solveIK(this.selected, point.add(this.ikDrag.offset));
-    }, true);
-    const finish = (event) => {
+    }, { capture: true, signal: this.lifetime.signal });
+    const finish = (event: PointerEvent) => {
       if (!this.ikDrag || event.pointerId !== this.ikDrag.pointerId) return;
       event.stopImmediatePropagation();
       this.finishIKDrag();
     };
-    canvas.addEventListener('pointerup', finish, true);
-    canvas.addEventListener('pointercancel', finish, true);
-    canvas.addEventListener('lostpointercapture', finish);
+    canvas.addEventListener('pointerup', finish, { capture: true, signal: this.lifetime.signal });
+    canvas.addEventListener('pointercancel', finish, { capture: true, signal: this.lifetime.signal });
+    canvas.addEventListener('lostpointercapture', finish, { signal: this.lifetime.signal });
   }
 
   finishIKDrag() {
@@ -319,11 +377,11 @@ export class Character {
     if (this.canvas.hasPointerCapture(drag.pointerId)) this.canvas.releasePointerCapture(drag.pointerId);
   }
 
-  capturePose() {
+  capturePose(): JointPose {
     return { format: 'studio-pose', version: 1, units: 'radians', rotation: this.group.rotation.y, placement: { grounded: this.grounded, height: this.height }, joints: structuredClone(this.poseAngles) };
   }
 
-  setGrounded(value) {
+  setGrounded(value: boolean) {
     this.finishIKDrag();
     if (!value && this.grounded) this.height = this.group.position.y;
     if (value) this.height = 0;
@@ -331,7 +389,7 @@ export class Character {
     this.update(0);
   }
 
-  setHeight(value) {
+  setHeight(value: number) {
     if (!Number.isFinite(value)) return;
     this.finishIKDrag();
     this.grounded = false;
@@ -339,17 +397,18 @@ export class Character {
     this.update(0);
   }
 
-  getFramingBounds(mode) {
+  getFramingBounds(mode: string) {
     if (!this.vrm) return null;
     this.update(0);
     const bounds = new THREE.Box3();
     this.vrm.scene.traverse((mesh) => {
-      if (!mesh.isMesh || !mesh.visible) return;
+      if (!(mesh instanceof THREE.Mesh) || !mesh.visible) return;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      if (!materials.some((material) => material.visible && !material.isOutline)) return;
-      if (mesh.isSkinnedMesh) mesh.computeBoundingBox();
+      if (!materials.some((material: THREE.Material) => material.visible && !(material instanceof MToonMaterial && material.isOutline))) return;
+      if (mesh instanceof THREE.SkinnedMesh) mesh.computeBoundingBox();
       else if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-      bounds.union((mesh.boundingBox ?? mesh.geometry.boundingBox).clone().applyMatrix4(mesh.matrixWorld));
+      const box = mesh instanceof THREE.SkinnedMesh ? mesh.boundingBox : mesh.geometry.boundingBox;
+      if (box) bounds.union(box.clone().applyMatrix4(mesh.matrixWorld));
     });
     if (bounds.isEmpty()) return null;
     const height = bounds.max.y - bounds.min.y;
@@ -362,7 +421,7 @@ export class Character {
     return bounds;
   }
 
-  restorePose(pose) {
+  restorePose(pose: unknown) {
     if (!validPose(pose)) throw new Error('姿势格式无效');
     this.group.rotation.y = pose.rotation;
     this.applyAngles(pose.joints);
@@ -371,7 +430,7 @@ export class Character {
     this.update(0);
   }
 
-  update(delta) {
+  update(delta: number) {
     if (!this.vrm) return;
     this.vrm.update(delta);
     if (this.grounded && !this.ikDrag) {
@@ -394,7 +453,12 @@ export class Character {
   }
 }
 
-function createPortraitMaterial(source, anisotropy) {
+function normalizeAngles(rotation: THREE.Euler): Vector3Tuple {
+  const normalize = (value: number) => Math.atan2(Math.sin(value), Math.cos(value));
+  return [normalize(rotation.x), normalize(rotation.y), normalize(rotation.z)];
+}
+
+function createPortraitMaterial(source: MToonMaterial, anisotropy: number) {
   const skin = /SKIN/i.test(source.name);
   const hair = /HAIR/i.test(source.name);
   const eye = /EyeIris|EyeWhite|EyeHighlight/i.test(source.name);
@@ -408,7 +472,7 @@ function createPortraitMaterial(source, anisotropy) {
     emissive: source.emissive.clone(),
     emissiveMap: source.emissiveMap,
     emissiveIntensity: Math.min(source.emissiveIntensity, 0.15),
-    alphaMap: source.alphaMap ?? null,
+    alphaMap: 'alphaMap' in source && source.alphaMap instanceof THREE.Texture ? source.alphaMap : null,
     alphaTest: source.alphaTest,
     opacity: source.opacity,
     transparent: source.transparent,
@@ -424,7 +488,7 @@ function createPortraitMaterial(source, anisotropy) {
     sheenColor: new THREE.Color('#b8b8b8'),
   });
   for (const value of Object.values(material)) {
-    if (!value?.isTexture) continue;
+    if (!(value instanceof THREE.Texture)) continue;
     value.anisotropy = anisotropy;
     value.needsUpdate = true;
   }

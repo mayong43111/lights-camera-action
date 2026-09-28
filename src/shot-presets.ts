@@ -1,9 +1,13 @@
-import { validProject } from './project-schema.js';
-import { LIGHT_DEFINITIONS } from './studio-scene.js';
+import { validProject } from './project-schema';
+import { LIGHT_DEFINITIONS } from './studio-scene';
+import { isColor, isRecord, isVector } from './schema-utils';
+import type { PoseLibrary, ShotCategory, ShotLight, ShotPreset, StudioProject, Vector3Tuple, Aspect } from './scene-types';
 
-export const SHOT_CATEGORIES = ['时尚封面', '写真集', '肖像', '其他'];
+export const SHOT_CATEGORIES: ShotCategory[] = ['时尚封面', '写真集', '肖像', '其他'];
 
-const BUILT_IN_SHOTS = [
+type LightStyle = 'soft' | 'split' | 'rim' | 'even';
+type BuiltInShot = [number, string, ShotCategory, string, Vector3Tuple, Vector3Tuple, number, Aspect, LightStyle, string];
+const BUILT_IN_SHOTS: BuiltInShot[] = [
   [101, '正面柔光肖像', '肖像', 'fashionFront', [0, 2.85, 3.8], [0, 2.85, 0], 85, '0.5625', 'soft', '正面近景，柔和主光与低强度辅光。'],
   [102, '四十五度侧颜', '肖像', 'fashionThreeQuarter', [0.4, 2.8, 4.2], [0, 2.7, 0], 85, '0.5625', 'split', '斜侧近景，侧光突出面部和肩部轮廓。'],
   [103, '侧身回眸', '肖像', 'profile', [0, 2.65, 4.6], [0, 2.5, 0], 70, '0.5625', 'rim', '回眸半身，轮廓光分离肩背线条。'],
@@ -26,17 +30,21 @@ const BUILT_IN_SHOTS = [
   [120, '芭蕾延伸', '其他', 'arabesque', [0, 2.1, 9], [0, 1.7, 0], 50, '1.333333', 'soft', '动作练习：横幅燕式，完整呈现手脚延伸。'],
 ];
 
-export function createBuiltInShots(poseLibrary, thumbnails = {}) {
+export function createBuiltInShots(poseLibrary: PoseLibrary, thumbnails: Record<string, string> = {}): ShotPreset[] {
   const lighting = {
     soft: [[-3.2, 4.5, 4.5, 6.5], [3.5, 3.3, 3.5, 3.5], [1, 4.5, -3, 3]],
     split: [[-4.5, 3.8, 2.5, 7], [4, 3, 3, 1.8], [1, 4.2, -3, 4]],
     rim: [[-3.5, 4.2, 4, 5.5], [3.8, 3.2, 3.8, 2.5], [0.5, 4.5, -3.4, 7]],
     even: [[-3, 4.2, 4.5, 6], [3, 4.2, 4.5, 5], [0, 4.5, -3, 2.5]],
   };
-  return BUILT_IN_SHOTS.map(([code, name, category, poseId, cameraPosition, target, focal, aspect, lightStyle, notes]) => {
+  return BUILT_IN_SHOTS.map(([code, name, category, poseId, cameraPosition, target, focal, aspect, lightStyle, notes]): ShotPreset => {
     const pose = poseLibrary.poses.find(entry => entry.id === poseId);
     if (!pose) throw new Error(`内置组合缺少姿势：${poseId}`);
     const id = `shot-${code.toString(16).padStart(32, '0')}`;
+    const light = (index: number): ShotLight => {
+      const [position, height, depth, intensity] = lighting[lightStyle][index];
+      return { enabled: true, color: '#ffffff', position, height, depth, intensity };
+    };
     return {
       id, name, category, notes, sourceName: `内置手动编排 · ${pose.name}`,
       thumbnail: thumbnails[id] ?? '',
@@ -45,24 +53,27 @@ export function createBuiltInShots(poseLibrary, thumbnails = {}) {
           placement: structuredClone(pose.placement ?? { grounded: true, height: 0 }), joints: structuredClone(pose.joints) },
         cameraPosition: [...cameraPosition], target: [...target], focal, aspect, exposure: 0.5,
         backdrop: '#eef2f4', props: [],
-        lights: Object.fromEntries(['key', 'fill', 'rim'].map((key, index) => {
-          const [position, height, depth, intensity] = lighting[lightStyle][index];
-          return [key, { enabled: true, color: '#ffffff', position, height, depth, intensity }];
-        })),
+        lights: { key: light(0), fill: light(1), rim: light(2) },
       },
     };
   });
 }
 
-export async function loadBuiltInShots(poseLibrary) {
+export async function loadBuiltInShots(poseLibrary: PoseLibrary): Promise<ShotPreset[]> {
   const response = await fetch(new URL('../assets/shots/thumbnails.json', import.meta.url), { signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error('无法加载内置组合预览');
-  const presets = createBuiltInShots(poseLibrary, await response.json());
+  const thumbnails: unknown = await response.json();
+  if (!isRecord(thumbnails) || !Object.values(thumbnails).every(value => typeof value === 'string')) throw new Error('内置组合预览数据无效');
+  const images: Record<string, string> = {};
+  for (const [id, value] of Object.entries(thumbnails)) {
+    if (typeof value === 'string') images[id] = value;
+  }
+  const presets = createBuiltInShots(poseLibrary, images);
   if (!presets.every(validShot)) throw new Error('内置组合数据无效');
   return presets;
 }
 
-export function createShotProject(preset) {
+export function createShotProject(preset: ShotPreset): StudioProject {
   const scene = structuredClone(preset.scene);
   return { version: 1, state: {
     ...scene, pose: 'aiReference', poseCustomized: true, poseSaveTarget: null,
@@ -72,27 +83,29 @@ export function createShotProject(preset) {
   } };
 }
 
-export function validShot(preset) {
-  const text = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
-  const vector = (value, limit) => Array.isArray(value) && value.length === 3 && value.every(number => typeof number === 'number' && Number.isFinite(number) && Math.abs(number) <= limit);
-  if (!preset || !/^shot-[a-f0-9]{32}$/.test(preset.id) || !text(preset.name, 80)
-    || !SHOT_CATEGORIES.includes(preset.category) || !text(preset.notes, 1200) || !text(preset.sourceName, 160)
+export function validShot(preset: unknown): preset is ShotPreset {
+  const text = (value: unknown, max: number) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+  if (!isRecord(preset) || typeof preset.id !== 'string' || !/^shot-[a-f0-9]{32}$/.test(preset.id) || !text(preset.name, 80)
+    || !SHOT_CATEGORIES.some(category => category === preset.category) || !text(preset.notes, 1200) || !text(preset.sourceName, 160)
     || typeof preset.thumbnail !== 'string' || preset.thumbnail.length > 200000 || !/^data:image\/jpeg;base64,[a-z0-9+/=]+$/i.test(preset.thumbnail)) return false;
   const scene = preset.scene;
-  if (!scene || !Array.isArray(scene.props) || !vector(scene.cameraPosition, 100) || !vector(scene.target, 20)
-    || Math.hypot(...scene.cameraPosition.map((value, axis) => value - scene.target[axis])) < 0.1) return false;
-  const keys = (value, expected) => value && typeof value === 'object' && !Array.isArray(value)
+  if (!isRecord(scene) || !Array.isArray(scene.props) || !isVector(scene.cameraPosition, -100, 100) || !isVector(scene.target, -20, 20)) return false;
+  const target = scene.target;
+  if (Math.hypot(...scene.cameraPosition.map((value, axis) => value - target[axis])) < 0.1) return false;
+  const keys = (value: unknown, expected: string): value is Record<string, unknown> => isRecord(value)
     && Object.keys(value).sort().join(',') === expected.split(',').sort().join(',');
-  const number = (value, low, high) => typeof value === 'number' && Number.isFinite(value) && value >= low && value <= high;
+  const number = (value: unknown, low: number, high: number) => typeof value === 'number' && Number.isFinite(value) && value >= low && value <= high;
   if (!keys(preset, 'id,name,category,notes,sourceName,scene,thumbnail')
     || !keys(scene, 'jointPose,cameraPosition,target,focal,aspect,exposure,backdrop,props,lights')
     || !keys(scene.jointPose, 'format,version,units,rotation,placement,joints')
     || !keys(scene.jointPose.placement, 'grounded,height') || !number(scene.jointPose.placement.height, -20, 20)
     || !number(scene.focal, 24, 100) || !number(scene.exposure, 0.125, 2) || typeof scene.aspect !== 'string'
-    || typeof scene.backdrop !== 'string' || !/^#[0-9a-f]{6}$/i.test(scene.backdrop)
+    || !isColor(scene.backdrop)
     || !scene.props.every(prop => keys(prop, 'type,position,rotation,size,color'))
     || !keys(scene.lights, 'key,fill,rim') || !Object.values(scene.lights).every(light => keys(light, 'enabled,intensity,color,position,height,depth')
       && number(light.intensity, 0, 12) && number(light.position, -6, 6) && number(light.height, 1, 6) && number(light.depth, -4, 6))) return false;
-  try { return validProject(createShotProject(preset), { poses: {}, characters: {}, lightDefinitions: LIGHT_DEFINITIONS }); }
+  try { return validProject({ version: 1, state: { ...scene, pose: 'aiReference', dof: 0,
+    props: scene.props.map((prop, index) => ({ ...prop, id: `prop-${preset.id}-${index}` })),
+  } }, { poses: {}, characters: {}, lightDefinitions: LIGHT_DEFINITIONS }); }
   catch { return false; }
 }

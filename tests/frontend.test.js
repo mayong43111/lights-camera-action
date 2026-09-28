@@ -1,17 +1,20 @@
-import { JOINTS, validPose } from '../src/pose-schema.js';
-import { createDefaultState, validProject } from '../src/project-schema.js';
-import { loadPoseLibrary, validatePoseLibrary } from '../src/pose-library.js';
-import { createPoseBrowser } from '../src/pose-browser.js';
-import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studio-scene.js';
-import { createCaptureController } from '../src/capture.js';
-import { createPoseStore } from '../src/pose-store.js';
-import { CHARACTERS, validateVrmBytes } from '../src/character.js';
-import { createLibraryClient } from '../src/library-client.js';
-import { SHOT_CATEGORIES, createBuiltInShots, loadBuiltInShots, createShotProject, validShot } from '../src/shot-presets.js';
-import { Scene, Box3, Vector3, PerspectiveCamera } from 'three';
-import { PROP_TYPES, MAX_PROPS, createPropState, validProps } from '../src/prop-schema.js';
-import { createPropsController } from '../src/props.js';
-import { createShotBrowser } from '../src/shot-browser.js';
+import { JOINTS, validPose } from '../src/pose-schema';
+import { createDefaultState, validProject } from '../src/project-schema';
+import { loadPoseLibrary, validatePoseLibrary } from '../src/pose-library';
+import { createPoseBrowser } from '../src/pose-browser';
+import { createStudio, createStudioLight, LIGHT_DEFINITIONS } from '../src/studio-scene';
+import { createCaptureController } from '../src/capture';
+import { createPoseStore } from '../src/pose-store';
+import { CHARACTERS, validateVrmBytes } from '../src/character';
+import { createLibraryClient } from '../src/library-client';
+import { SHOT_CATEGORIES, createBuiltInShots, loadBuiltInShots, createShotProject, validShot } from '../src/shot-presets';
+import { Scene, Box3, Vector3, PerspectiveCamera, Object3D, Quaternion } from 'three';
+import { LimbIK } from '../src/pose-ik';
+import { PROP_TYPES, MAX_PROPS, createPropState, validProps } from '../src/prop-schema';
+import { createPropsController } from '../src/props';
+import { createShotBrowser } from '../src/shot-browser';
+import { createShotModel } from '../src/shot-model';
+import { createImagePreview } from '../src/image-preview';
 
 function shotFixture() {
   return { id: 'shot-' + 'a'.repeat(32), name: '模拟单人', category: '肖像', notes: '仅测试模拟数据',
@@ -89,6 +92,55 @@ export async function runTests() {
     catch (error) { results.push({ name, passed: false, error: error.message }); }
   };
   const catalog = await loadPoseLibrary();
+  await test('typed shot model filters, applies snapshots and protects built-ins', async () => {
+    const builtIn = shotFixture();
+    const personal = { ...shotFixture(), id: 'shot-' + 'b'.repeat(32), category: '其他' };
+    let saved = { version: 1, items: [personal] };
+    let writes = 0;
+    const model = createShotModel({ builtIns: [builtIn], isAvailable: () => true, confirmDelete: () => true,
+      apply(item) { item.name = 'changed'; },
+      client: { async settings() { return saved; }, async saveSettings(name, value) { saved = value; writes++; } },
+      request: async () => new Response(JSON.stringify({ configured: false })) });
+    try {
+      await model.ready;
+      await model.applySelected();
+      equal(model.selected().name, builtIn.name);
+      await model.removeSelected(); equal(writes, 0);
+      model.setCategory('其他'); equal(model.visible().length, 1);
+      await model.removeSelected(); equal(saved.items, []); equal(writes, 1);
+      model.setCategory(''); equal(model.visible().length, 1);
+    } finally { model.dispose(); }
+  });
+  await test('image preview fits, zooms, preserves its parent dialog and releases the image', async () => {
+    const parent = document.createElement('dialog');
+    parent.innerHTML = '<button type="button">Open preview</button>';
+    document.body.append(parent);
+    const preview = createImagePreview();
+    try {
+      parent.showModal();
+      parent.querySelector('button').focus();
+      const canvas = document.createElement('canvas');
+      canvas.width = 1200; canvas.height = 800;
+      assert(await preview.open(canvas.toDataURL(), 'Preview test'), 'image failed to load');
+      assert(parent.open && preview.dialog.open, 'parent dialog closed');
+      const image = preview.dialog.querySelector('img');
+      const viewport = preview.dialog.querySelector('.image-viewer-viewport');
+      assert(image.getBoundingClientRect().width <= viewport.clientWidth + 1, 'initial image does not fit');
+      preview.dialog.querySelector('[data-preview="actual"]').click();
+      equal(preview.dialog.querySelector('output').value, '100%');
+      preview.dialog.querySelector('[data-preview="in"]').click();
+      equal(preview.dialog.querySelector('output').value, '125%');
+      preview.dialog.querySelector('[data-preview="fit"]').click();
+      assert(image.getBoundingClientRect().height <= viewport.clientHeight + 1, 'fit height overflow');
+      preview.dialog.querySelector('[data-preview="close"]').click();
+      await waitUntil(() => !image.hasAttribute('src'));
+      assert(parent.open && document.activeElement === parent.querySelector('button'), 'focus or parent dialog not restored');
+      assert(!await preview.open('data:image/png;base64,AAAA', 'Invalid image'), 'invalid image accepted');
+      equal(preview.dialog.querySelector('[role="status"]').textContent, '图片无法加载');
+      preview.dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      assert(!preview.dialog.open && parent.open, 'Escape did not close only the preview');
+    } finally { preview.destroy(); parent.close(); parent.remove(); }
+  });
   await test('props validate dimensions, limits and unique identities', () => {
     const items = Object.keys(PROP_TYPES).map(createPropState);
     assert(validProps(items), 'valid props rejected');
@@ -115,6 +167,7 @@ export async function runTests() {
     try {
       for (const type of Object.keys(PROP_TYPES)) {
         root.querySelector('#prop-type').value = type;
+        root.querySelector('#prop-type').dispatchEvent(new Event('change', { bubbles: true }));
         root.querySelector('#prop-add').click();
       }
       const before = controller.capture();
@@ -127,9 +180,9 @@ export async function runTests() {
         assert(Math.abs(bounds.min.y) < 0.0001, 'prop does not rest on floor');
       }
       const width = root.querySelector('[data-prop-field="size"][data-axis="0"]');
-      width.value = '2.5'; width.dispatchEvent(new Event('input'));
+      width.value = '2.5'; width.dispatchEvent(new Event('input', { bubbles: true }));
       equal(controller.capture()[3].size[0], 2.5);
-      width.value = '0'; width.dispatchEvent(new Event('input'));
+      width.value = '0'; width.dispatchEvent(new Event('input', { bubbles: true }));
       equal(controller.capture()[3].size[0], 2.5);
       root.querySelector('#prop-copy').click();
       equal(controller.capture().length, 5);
@@ -162,6 +215,7 @@ export async function runTests() {
       onBeforeChange() { history++; }, onChange() {}, onFrame() {}, isAvailable: () => true, announce() {} });
     try {
       root.querySelector('#prop-type').value = 'block';
+      root.querySelector('#prop-type').dispatchEvent(new Event('change', { bubbles: true }));
       root.querySelector('#prop-add').click();
       controller.setEditing(true);
       const model = controller.gizmo.object;
@@ -238,19 +292,21 @@ export async function runTests() {
       request: async () => new Response(JSON.stringify({ configured: false })) });
     try {
       await controller.ready;
-      equal(root.querySelector('#shot-select').options.length, 2);
+      equal(controller.model.visible().length, 2);
+      assert(root.querySelector('#shot-preset[role="combobox"]'), 'searchable preset picker missing');
       assert(root.querySelector('#shot-delete').disabled, 'built-in deletion was enabled');
       root.querySelector('#shot-delete').click(); equal(writes, 0);
-      root.querySelector('#shot-apply').click(); equal(applied, builtIn.id);
-      const category = root.querySelector('#shot-category');
-      category.value = '其他'; category.dispatchEvent(new Event('change'));
-      equal(root.querySelector('#shot-select').options.length, 1);
+      await controller.model.applySelected(); equal(applied, builtIn.id);
+      controller.model.setCategory('其他');
+      await waitUntil(() => root.querySelector('#shot-select').textContent.includes(personal.name));
+      equal(controller.model.visible().length, 1);
       assert(!root.querySelector('#shot-delete').disabled, 'personal deletion was disabled');
       root.querySelector('#shot-delete').click();
-      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      await waitUntil(() => !controller.model.getSnapshot().busy);
       equal(saved.items.length, 0); equal(writes, 1);
-      category.value = ''; category.dispatchEvent(new Event('change'));
-      equal(root.querySelector('#shot-select').options.length, 1);
+      controller.model.setCategory('');
+      await waitUntil(() => root.querySelector('#shot-select').textContent.includes(builtIn.name));
+      equal(controller.model.visible().length, 1);
       equal(root.querySelector('#shot-count').textContent, '内置 1 · 自存 0 / 100');
       assert(root.querySelector('#shot-source-input'), 'AI upload was removed');
     } finally { controller.dispose(); }
@@ -292,43 +348,41 @@ export async function runTests() {
     let controller = createShotBrowser(options);
     try {
       await controller.ready;
-      equal(root.querySelector('#shot-select').options.length, 0);
+      equal(controller.model.visible().length, 0);
       const canvas = document.createElement('canvas'); canvas.width = 2; canvas.height = 2;
       const blob = await new Promise(resolve => canvas.toBlob(resolve));
       const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'fixture.png', { type: 'image/png' }));
-      const input = root.querySelector('#shot-source-input'); input.files = transfer.files;
-      input.dispatchEvent(new Event('change'));
+      await controller.model.upload(transfer.files[0]);
       await waitUntil(() => !root.querySelector('#shot-source-preview').hidden, () => 'first image: ' + root.querySelector('#shot-ai-status').textContent);
       root.querySelector('#shot-generate').click(); equal(calls, 0);
-      const consent = root.querySelector('#shot-consent'); consent.checked = true; consent.dispatchEvent(new Event('change'));
-      root.querySelector('#shot-generate').click();
-      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      const consent = root.querySelector('#shot-consent');
+      controller.model.setConsent(true);
+      await controller.model.generate();
+      await waitUntil(() => !root.querySelector('#shot-result').hidden);
       equal(calls, 1); equal(applied, 0); equal(saved, null);
       assert(!consent.checked && !root.querySelector('#shot-result').hidden, 'result or consent state invalid');
-      root.querySelector('#shot-preview-result').click(); equal(applied, 1);
-      root.querySelector('#shot-name').value = '自定名称';
-      root.querySelector('#shot-result-category').value = '写真集';
+      await controller.model.previewDraft(); equal(applied, 1);
+      controller.model.editDraft({ name: '自定名称', category: '写真集' });
       failSave = true;
-      root.querySelector('#shot-save-result').click();
-      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      await controller.model.saveDraft();
       assert(!root.querySelector('#shot-result').hidden && saved === null, 'failed save lost draft');
       failSave = false;
-      root.querySelector('#shot-save-result').click();
-      await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      await controller.model.saveDraft();
       equal(saved.items[0].name, '自定名称'); equal(saved.items[0].category, '写真集');
       controller.dispose(); controller = createShotBrowser(options); await controller.ready;
-      equal(root.querySelector('#shot-select').options.length, 1);
-      root.querySelector('#shot-category').value = '时尚封面'; root.querySelector('#shot-category').dispatchEvent(new Event('change'));
-      equal(root.querySelector('#shot-select').options.length, 0);
-      root.querySelector('#shot-category').value = ''; root.querySelector('#shot-category').dispatchEvent(new Event('change'));
-      root.querySelector('#shot-delete').click(); await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      equal(controller.model.visible().length, 1);
+      controller.model.setCategory('时尚封面');
+      await waitUntil(() => !root.querySelector('#shot-empty').hidden);
+      equal(controller.model.visible().length, 0);
+      controller.model.setCategory('');
+      await controller.model.removeSelected();
       equal(saved.items, []);
       reject = true;
       const nextTransfer = new DataTransfer(); nextTransfer.items.add(new File([blob], 'fixture.png', { type: 'image/png' }));
-      const nextInput = root.querySelector('#shot-source-input'); nextInput.files = nextTransfer.files; nextInput.dispatchEvent(new Event('change'));
-      await waitUntil(() => !root.querySelector('#shot-source-preview').hidden, () => 'second image: ' + root.querySelector('#shot-ai-status').textContent + ', files=' + nextInput.files.length);
-      const nextConsent = root.querySelector('#shot-consent'); nextConsent.checked = true; nextConsent.dispatchEvent(new Event('change'));
-      root.querySelector('#shot-generate').click(); await waitUntil(() => root.getAttribute('aria-busy') === 'false');
+      await controller.model.upload(nextTransfer.files[0]);
+      await waitUntil(() => !root.querySelector('#shot-source-preview').hidden);
+      controller.model.setConsent(true);
+      await controller.model.generate();
       assert(root.querySelector('#shot-result').hidden, 'multiple-person response produced draft');
       equal(applied, 1); equal(saved.items, []);
     } finally { controller.dispose(); }
@@ -550,6 +604,25 @@ export async function runTests() {
     });
     materials.forEach((material) => material.dispose());
   });
+  await test('normalized IK nodes retain endpoint orientation and dispose targets', () => {
+    const scene = new Scene();
+    const upper = new Object3D();
+    const lower = new Object3D();
+    const hand = new Object3D();
+    upper.add(lower); lower.add(hand); scene.add(upper);
+    lower.position.x = 1; hand.position.x = 1;
+    scene.updateMatrixWorld(true);
+    const solver = new LimbIK({ leftUpperArm: upper, leftLowerArm: lower, leftHand: hand }, scene);
+    const target = new Vector3(1.4, 0, 0.7);
+    try {
+      equal(solver.solve('leftHand', target), ['leftUpperArm', 'leftLowerArm', 'leftHand']);
+      assert(hand.getWorldPosition(new Vector3()).distanceTo(target) < 0.08, 'IK endpoint did not reach target');
+      assert(hand.getWorldQuaternion(new Quaternion()).angleTo(new Quaternion()) < 0.001, 'IK changed endpoint orientation');
+      equal(solver.solve('missing', target), []);
+    } finally { solver.dispose(); }
+    assert(solver.target.parent === null && solver.chains.size === 0, 'IK targets were not released');
+  });
+
   await test('normal capture archives once without downloading', () => {
     const { capture, state, root } = captureFixture();
     const original = HTMLAnchorElement.prototype.click;
@@ -600,37 +673,49 @@ export async function runTests() {
       }
     });
   }
-  await test('data-only browser entry, filtering and selection', () => {
+  await test('disposing active recording stops tracks without late UI or download callbacks', () => {
+    const { capture, state, character } = captureFixture();
+    capture.toggleRecording();
+    assert(capture.isRecording, 'recording did not start');
+    capture.dispose();
+    capture.dispose();
+    state.recorder.dispatchEvent(new Event('stop'));
+    state.recorder.dispatchEvent(new Event('error'));
+    capture.toggleRecording();
+    equal(state.stopped, 1);
+    equal(state.resized, 0);
+    assert(!capture.isRecording && character.editing, 'disposed recorder stayed active');
+    assert(!capture.takePhoto(), 'disposed capture accepted a photo');
+  });
+  await test('data-only browser entry, filtering and selection', async () => {
     const root = document.createElement('div');
-    root.innerHTML = '<div id="pose-library-home"><div id="pose-library"><select id="pose-folder"></select><nav id="pose-folders"></nav><input id="pose-search"><button id="pose-search-clear"></button><div id="pose-controls"></div><span id="pose-count"></span><p id="pose-empty"></p></div></div><dialog id="pose-dialog"><button id="pose-dialog-close"></button><div id="pose-dialog-body"></div></dialog><button id="pose-expand"></button><span id="pose-state"></span>';
+    root.innerHTML = '<div id="pose-library-home"></div>';
     const data = structuredClone(catalog);
     data.poses.push({ id: 'testEntry', name: 'Test Pose', folder: 'Test Folder', joints: { head: [0, 0, 0] } });
     let selected;
     const browser = createPoseBrowser(data, (pose) => { selected = pose.id; }, root);
+    try {
+    assert(root.querySelector('#pose-search[role="combobox"]'), 'searchable pose picker missing');
     for (const category of new Set(catalog.poses.filter(pose => pose.source).map(pose => pose.folder))) {
-      const control = root.querySelector('#pose-folder');
-      control.value = category;
-      control.dispatchEvent(new Event('change'));
+      browser.setFolder(category);
       const expected = catalog.poses.filter(pose => pose.folder === category);
-      equal(root.querySelectorAll('[data-pose]:not([hidden])').length, expected.length);
-      root.querySelector(`[data-pose="${expected[0].id}"]`).click();
+      await waitUntil(() => root.querySelector('#pose-count').textContent === `${category} · ${expected.length} / ${expected.length}`);
+      browser.choose(expected[0]);
       equal(selected, expected[0].id);
     }
     browser.updateCatalog(data);
     browser.updateCatalog(data, { reveal: 'testEntry' });
-    equal(root.querySelectorAll('[data-pose]').length, data.poses.length);
-    equal(root.querySelector('#pose-folder').value, 'Test Folder');
-    const folder = root.querySelector('#pose-folder');
-    folder.value = 'Test Folder';
-    folder.dispatchEvent(new Event('change'));
-    equal(root.querySelectorAll('[data-pose]:not([hidden])').length, 1);
-    root.querySelector('[data-pose="testEntry"]').click();
+    await waitUntil(() => root.querySelector('#pose-count').textContent === 'Test Folder · 1 / 1');
+    equal(browser.getSnapshot().catalog.poses.length, data.poses.length);
+    equal(browser.getSnapshot().folder, 'Test Folder');
+    browser.choose(data.poses.find(pose => pose.id === 'testEntry'));
     equal(selected, 'testEntry');
     browser.setSelection(selected);
-    equal(root.querySelector('[data-pose][aria-pressed="true"]').dataset.pose, selected);
+    await waitUntil(() => root.querySelector('#pose-library .ant-select-selection-item[title="Test Pose"]'));
     browser.setSelection(null);
-    equal(root.querySelectorAll('[data-pose][aria-pressed="true"]').length, 0);
+    await waitUntil(() => !root.querySelector('#pose-library .ant-select-selection-item[title="Test Pose"]'));
     equal(root.querySelector('#pose-state').textContent, '自定义姿势');
+    } finally { browser.dispose(); }
   });
   console.table(results);
   const failures = results.filter((result) => !result.passed);

@@ -1,0 +1,36 @@
+.ant-btn { letter-spacing: 0; }
+.ant-btn.icon-button { padding: 0; display: inline-flex; }
+.ant-btn[hidden], .asset-dialogs [hidden] { display: none; }
+.ant-btn.character-button { height: auto; display: flex; white-space: normal; }
+.ant-btn.swatch { background: var(--swatch); padding: 0; }
+.ant-btn.retouch-reference { height: 110px; white-space: normal; }
+.ant-btn.retouch-image-open { height: auto; padding: 0; background: transparent; border: 0; }
+.startup-error { position: fixed; top: 80px; left: 16px; right: 16px; z-index: 1000; }
+.ant-btn:focus-visible { outline: 2px solid #28786f; outline-offset: 2px; }
+.studio-range { display: block; min-width: 0; width: 100%; }
+.studio-range input[hidden] { display: none; }
+.studio-range .ant-slider { margin: 10px 6px; }
+.joint-axis > .studio-range { grid-column: 1 / -1; }
+.shot-browser .ant-select { width: 100%; margin: 6px 0; }
+.shot-browser .shot-picker { min-width: 0; margin-bottom: 6px; }
+.shot-browser .shot-consent { margin: 12px 0; display: flex; align-items: flex-start; }
+.shot-browser .shot-consent .ant-checkbox { flex-shrink: 0; margin-top: 2px; }
+.pose-search-control { display: flex; gap: 4px; min-width: 0; }
+.pose-search-control .ant-input-affix-wrapper { min-width: 0; }
+.pose-toolbar .ant-select { width: 100%; min-width: 0; }
+.pose-library.is-expanded { grid-template-columns: 160px minmax(0, 1fr); height: min(540px, 65dvh); }
+.pose-library.is-expanded .pose-folders { display: flex; flex-direction: column; grid-row: 1 / 4; overflow: auto; }
+.pose-library.is-expanded .pose-results { min-height: 0; }
+.pose-library.is-expanded .pose-grid { height: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pose-library.is-expanded .pose-folder-button { justify-content: flex-start; height: auto; min-height: 36px; white-space: normal; }
+.pose-library.is-expanded .pose-folder-button small { margin-left: auto; }
+.pose-react-dialog .ant-modal-body { min-height: 0; }
+#pose-save-controls { display: flex; gap: 4px; }
+.pose-save-form { display: grid; gap: 10px; }
+.pose-save-form footer { display: flex; justify-content: flex-end; gap: 8px; }
+.pose-save-form [role="alert"] { margin: 0; color: #b33b30; }
+@media (max-width: 600px) {
+	.pose-library.is-expanded { display: grid; grid-template-columns: minmax(0, 1fr); }
+	.pose-library.is-expanded .pose-folders { display: none; }
+	.pose-library.is-expanded .pose-grid { grid-template-columns: minmax(0, 1fr); }
+}

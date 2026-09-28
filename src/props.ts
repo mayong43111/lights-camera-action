@@ -1,15 +1,18 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { PROP_TYPES, MAX_PROPS, createPropState, validProps } from './prop-schema.js';
+import { PROP_TYPES, MAX_PROPS, createPropState, validProps } from './prop-schema';
+import type { SceneProp, Vector3Tuple } from './scene-types';
+import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { requiredElement } from './dom';
 
-export function createPropModel(type, color) {
+export function createPropModel(type: string, color: THREE.ColorRepresentation) {
   if (!Object.hasOwn(PROP_TYPES, type)) throw new Error('未知道具类型');
   const group = new THREE.Group();
   const shape = new THREE.Group();
   group.add(shape);
   const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.55 });
   const metal = new THREE.MeshStandardMaterial({ color: '#d2d9dc', metalness: 0.75, roughness: 0.3 });
-  const add = (geometry, material, position) => {
+  const add = (geometry: THREE.BufferGeometry, material: THREE.Material, position: Vector3Tuple) => {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(...position);
     mesh.castShadow = true;
@@ -43,7 +46,7 @@ export function createPropModel(type, color) {
     const green = new THREE.MeshStandardMaterial({ color: '#477a4c', roughness: 0.85 });
     const centerMaterial = new THREE.MeshStandardMaterial({ color: '#edc65b', roughness: 0.8 });
     add(new THREE.CylinderGeometry(0.105, 0.15, 0.28, 24), ceramic, [0, 0.14, 0]);
-    const blossoms = [[0, 0.9, 0], [-0.19, 0.73, 0.06], [0.17, 0.77, 0.09], [-0.04, 0.72, -0.2], [0.05, 0.64, 0.2]];
+    const blossoms: Vector3Tuple[] = [[0, 0.9, 0], [-0.19, 0.73, 0.06], [0.17, 0.77, 0.09], [-0.04, 0.72, -0.2], [0.05, 0.64, 0.2]];
     for (const position of blossoms) {
       const start = new THREE.Vector3(0, 0.19, 0);
       const end = new THREE.Vector3(...position);
@@ -68,32 +71,49 @@ export function createPropModel(type, color) {
   shape.scale.set(1 / size.x, 1 / size.y, 1 / size.z);
   shape.position.set(-center.x / size.x, -bounds.min.y / size.y, -center.z / size.z);
   group.userData.paint = paint;
-  if (!shape.children.some(mesh => mesh.material === metal)) metal.dispose();
+  if (!shape.children.some(mesh => mesh instanceof THREE.Mesh && mesh.material === metal)) metal.dispose();
   return group;
 }
 
-function disposeModel(group) {
-  const materials = new Set();
+function disposeModel(group: THREE.Object3D) {
+  const materials = new Set<THREE.Material>();
   group.traverse(object => {
-    object.geometry?.dispose();
-    if (object.material) materials.add(object.material);
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry.dispose();
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
   });
   materials.forEach(material => material.dispose());
 }
 
-export function createPropsController({ scene, root, camera, canvas, orbit, onSelect = () => {}, canPick = () => true, onBeforeChange, onChange, onFrame, isAvailable, announce }) {
+interface PropsOptions {
+  scene: THREE.Scene;
+  root: HTMLElement;
+  camera?: THREE.Camera;
+  canvas?: HTMLCanvasElement;
+  orbit?: Pick<OrbitControls, 'enabled' | 'autoRotate'>;
+  onSelect?(): void;
+  canPick?(): boolean;
+  onBeforeChange(): void;
+  onChange(): void;
+  onFrame(): void;
+  isAvailable(): boolean;
+  announce(message: string): void;
+}
+
+export function createPropsController({ scene, root, camera, canvas, orbit, onSelect = () => {}, canPick = () => true, onBeforeChange, onChange, onFrame, isAvailable, announce }: PropsOptions) {
+  const element = <ElementType extends HTMLElement = HTMLElement>(selector: string) => requiredElement<ElementType>(selector, root);
   const group = new THREE.Group();
   group.name = 'Props';
   scene.add(group);
-  let items = [];
-  let selected = null;
+  let items: SceneProp[] = [];
+  let selected: string | null = null;
   let editing = false;
   let helpersVisible = true;
-  let pointerStart = null;
-  let orbitState = null;
+  let pointerStart: [number, number] | null = null;
+  let orbitState: { enabled: boolean; autoRotate: boolean } | null = null;
   const gizmo = camera && canvas ? new TransformControls(camera, canvas) : null;
   const outline = gizmo ? new THREE.Box3Helper(new THREE.Box3(), '#d34e38') : null;
-  if (gizmo) {
+  if (gizmo && outline) {
     gizmo.setSize(0.75);
     gizmo.enabled = false;
     outline.visible = false;
@@ -107,12 +127,13 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     <fieldset id="prop-fields"><legend>道具参数</legend>
     ${[['position', '位置', -20, 20], ['rotation', '旋转角度', -180, 180], ['size', '尺寸', 0.02, 10]].map(([key, name, min, max]) => `<div class="prop-vector"><span>${name}</span><div>${['X', 'Y', 'Z'].map((axis, index) => `<label>${axis}<input type="number" data-prop-field="${key}" data-axis="${index}" min="${min}" max="${max}" step="any" aria-label="道具${name} ${axis}"></label>`).join('')}</div></div>`).join('')}
     <label class="prop-color">颜色<input id="prop-color" type="color" aria-label="道具颜色"></label></fieldset>`;
-  const typeSelect = root.querySelector('#prop-type');
+  const typeSelect = element<HTMLSelectElement>('#prop-type');
   Object.entries(PROP_TYPES).forEach(([type, definition]) => typeSelect.add(new Option(definition.name, type)));
-  const list = root.querySelector('#prop-list');
+  const list = element<HTMLSelectElement>('#prop-list');
   const current = () => items.find(item => item.id === selected);
-  const apply = item => {
+  const apply = (item: SceneProp) => {
     const model = group.children.find(child => child.name === item.id);
+    if (!model) throw new Error('道具模型不存在');
     model.position.fromArray(item.position);
     model.rotation.set(...item.rotation);
     model.scale.fromArray(item.size);
@@ -121,18 +142,18 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     updateHelpers();
   };
   function updateHelpers() {
-    if (!gizmo) return;
+    if (!gizmo || !outline) return;
     const model = group.children.find(child => child.name === selected);
     const visible = !!model && editing && helpersVisible;
     gizmo.enabled = visible;
-    if (visible) {
+    if (visible && model) {
       gizmo.attach(model);
       outline.box.setFromObject(model);
     } else gizmo.detach();
     outline.visible = visible;
   }
   function finishDrag() {
-    if (!orbitState) return;
+    if (!orbitState || !orbit) return;
     orbit.enabled = orbitState.enabled;
     orbit.autoRotate = orbitState.autoRotate;
     orbitState = null;
@@ -150,43 +171,49 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
   gizmo?.addEventListener('objectChange', () => {
     const item = current();
     if (!item) return;
-    const model = gizmo.object;
+    const model = gizmo?.object;
+    if (!model) return;
     if (isAvailable()) {
-      item.position = model.position.toArray().map(value => THREE.MathUtils.clamp(value, -20, 20));
-      item.rotation = [model.rotation.x, model.rotation.y, model.rotation.z].map(value => Math.atan2(Math.sin(value), Math.cos(value)));
-      item.size = model.scale.toArray().map(value => THREE.MathUtils.clamp(value, 0.02, 10));
+      const clampPosition = (value: number) => THREE.MathUtils.clamp(value, -20, 20);
+      const normalizeAngle = (value: number) => Math.atan2(Math.sin(value), Math.cos(value));
+      const clampSize = (value: number) => THREE.MathUtils.clamp(value, 0.02, 10);
+      item.position = [clampPosition(model.position.x), clampPosition(model.position.y), clampPosition(model.position.z)];
+      item.rotation = [normalizeAngle(model.rotation.x), normalizeAngle(model.rotation.y), normalizeAngle(model.rotation.z)];
+      item.size = [clampSize(model.scale.x), clampSize(model.scale.y), clampSize(model.scale.z)];
     }
     apply(item);
     sync();
     onChange();
   });
-  const pointerDown = event => {
+  const pointerDown = (event: PointerEvent) => {
     pointerStart = event.button === 0 ? [event.clientX, event.clientY] : null;
   };
-  const pointerUp = event => {
+  const pointerUp = (event: PointerEvent) => {
     const start = pointerStart;
     pointerStart = null;
-    if (!start || !isAvailable() || !canPick() || gizmo?.axis || Math.hypot(event.clientX - start[0], event.clientY - start[1]) > 5) return;
+    if (!start || !canvas || !camera || !isAvailable() || !canPick() || gizmo?.axis || Math.hypot(event.clientX - start[0], event.clientY - start[1]) > 5) return;
     const rect = canvas.getBoundingClientRect();
     const pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, 1 - (event.clientY - rect.top) / rect.height * 2);
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, camera);
-    let model = raycaster.intersectObject(group, true)[0]?.object;
+    let model: THREE.Object3D | null | undefined = raycaster.intersectObject(group, true)[0]?.object;
     while (model && model.parent !== group) model = model.parent;
     selected = model?.name ?? null;
     if (selected) onSelect();
     sync();
   };
   const cancelPointer = () => { pointerStart = null; finishDrag(); };
-  if (gizmo) {
+  if (gizmo && canvas) {
     canvas.addEventListener('pointerdown', pointerDown);
     canvas.addEventListener('pointerup', pointerUp);
     canvas.addEventListener('pointercancel', cancelPointer);
     canvas.addEventListener('lostpointercapture', finishDrag);
   }
-  root.querySelectorAll('[data-prop-mode]').forEach(button => button.addEventListener('click', () => {
+  root.querySelectorAll<HTMLButtonElement>('[data-prop-mode]').forEach(button => button.addEventListener('click', () => {
     if (!isAvailable()) return;
-    gizmo?.setMode(button.dataset.propMode);
+    const mode = button.dataset.propMode;
+    if (mode !== 'translate' && mode !== 'rotate' && mode !== 'scale') return;
+    gizmo?.setMode(mode);
     gizmo?.setSpace(button.dataset.propMode === 'translate' ? 'world' : 'local');
     root.querySelectorAll('[data-prop-mode]').forEach(option => option.setAttribute('aria-pressed', String(option === button)));
   }));
@@ -194,21 +221,23 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     const item = current();
     list.replaceChildren(...items.map((entry, index) => new Option(`${String(index + 1).padStart(2, '0')} · ${PROP_TYPES[entry.type].name}`, entry.id)));
     list.value = selected ?? '';
-    root.querySelector('#prop-count').value = `${items.length} / ${MAX_PROPS}`;
-    root.querySelector('#prop-add').disabled = items.length >= MAX_PROPS;
-    root.querySelector('#prop-copy').disabled = !item || items.length >= MAX_PROPS;
-    root.querySelector('#prop-delete').disabled = !item;
-    root.querySelector('#prop-fields').disabled = !item;
-    root.querySelectorAll('[data-prop-field]').forEach(input => {
-      const value = item?.[input.dataset.propField][Number(input.dataset.axis)] ?? 0;
-      input.value = Number((input.dataset.propField === 'rotation' ? THREE.MathUtils.radToDeg(value) : value).toFixed(3));
+    element<HTMLOutputElement>('#prop-count').value = `${items.length} / ${MAX_PROPS}`;
+    element<HTMLButtonElement>('#prop-add').disabled = items.length >= MAX_PROPS;
+    element<HTMLButtonElement>('#prop-copy').disabled = !item || items.length >= MAX_PROPS;
+    element<HTMLButtonElement>('#prop-delete').disabled = !item;
+    element<HTMLFieldSetElement>('#prop-fields').disabled = !item;
+    root.querySelectorAll<HTMLInputElement>('[data-prop-field]').forEach(input => {
+      const field = input.dataset.propField;
+      if (field !== 'position' && field !== 'rotation' && field !== 'size') return;
+      const value = item?.[field][Number(input.dataset.axis)] ?? 0;
+      input.value = String(Number((field === 'rotation' ? THREE.MathUtils.radToDeg(value) : value).toFixed(3)));
       input.setCustomValidity('');
     });
-    root.querySelector('#prop-color').value = item?.color ?? '#b6c3c8';
-    root.querySelectorAll('[data-prop-mode]').forEach(button => { button.disabled = !item; });
+    element<HTMLInputElement>('#prop-color').value = item?.color ?? '#b6c3c8';
+    root.querySelectorAll<HTMLButtonElement>('[data-prop-mode]').forEach(button => { button.disabled = !item; });
     updateHelpers();
   }
-  function insert(item) {
+  function insert(item: SceneProp) {
     if (!isAvailable() || items.length >= MAX_PROPS) return;
     const model = createPropModel(item.type, item.color);
     onBeforeChange();
@@ -221,22 +250,23 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     onChange();
     announce(`已添加${PROP_TYPES[item.type].name}`);
   }
-  root.querySelector('#prop-add').addEventListener('click', () => {
+  element('#prop-add').addEventListener('click', () => {
     const item = createPropState(typeSelect.value);
     item.position = [1.4 + (items.length % 4) * 1.25, 0, -Math.floor(items.length / 4) * 1.25];
     insert(item);
   });
-  root.querySelector('#prop-copy').addEventListener('click', () => {
+  element('#prop-copy').addEventListener('click', () => {
     const item = current();
     if (!item) return;
     const copy = { ...structuredClone(item), id: createPropState(item.type).id };
     copy.position[0] = Math.min(20, copy.position[0] + 0.25);
     insert(copy);
   });
-  root.querySelector('#prop-delete').addEventListener('click', () => {
+  element('#prop-delete').addEventListener('click', () => {
     if (!current() || !isAvailable()) return;
     onBeforeChange();
     const model = group.children.find(child => child.name === selected);
+    if (!model) return;
     group.remove(model);
     disposeModel(model);
     items = items.filter(item => item.id !== selected);
@@ -245,9 +275,9 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     onChange();
     announce('道具已删除，可撤销');
   });
-  root.querySelector('#prop-frame').addEventListener('click', () => { if (isAvailable()) onFrame(); });
+  element('#prop-frame').addEventListener('click', () => { if (isAvailable()) onFrame(); });
   list.addEventListener('change', () => { selected = list.value; sync(); });
-  root.querySelectorAll('#prop-fields input').forEach(input => {
+  root.querySelectorAll<HTMLInputElement>('#prop-fields input').forEach(input => {
     input.addEventListener('focus', () => { if (isAvailable()) onBeforeChange(); });
     input.addEventListener('input', () => {
       const item = current();
@@ -256,7 +286,9 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
       if (input.id === 'prop-color') next.color = input.value;
       else {
         const value = input.value === '' ? NaN : Number(input.value);
-        next[input.dataset.propField][Number(input.dataset.axis)] = input.dataset.propField === 'rotation' ? THREE.MathUtils.degToRad(value) : value;
+        const field = input.dataset.propField;
+        if (field !== 'position' && field !== 'rotation' && field !== 'size') return;
+        next[field][Number(input.dataset.axis)] = field === 'rotation' ? THREE.MathUtils.degToRad(value) : value;
       }
       if (!validProps([next])) { input.setCustomValidity('请输入范围内的数值'); return; }
       input.setCustomValidity('');
@@ -270,11 +302,11 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
   return {
     group,
     gizmo,
-    setEditing(value) { finishDrag(); editing = value; updateHelpers(); },
-    setHelpersVisible(value) { finishDrag(); helpersVisible = value; updateHelpers(); },
+    setEditing(value: boolean) { finishDrag(); editing = value; updateHelpers(); },
+    setHelpersVisible(value: boolean) { finishDrag(); helpersVisible = value; updateHelpers(); },
     capture: () => structuredClone(items),
     getBounds: () => new THREE.Box3().setFromObject(group),
-    restore(snapshot) {
+    restore(snapshot: unknown) {
       if (!validProps(snapshot)) throw new Error('道具配置无效');
       const next = structuredClone(snapshot);
       const models = next.map(item => { const model = createPropModel(item.type, item.color); model.name = item.id; return model; });
@@ -288,7 +320,7 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
     },
     dispose() {
       finishDrag();
-      if (gizmo) {
+      if (gizmo && canvas && outline) {
         canvas.removeEventListener('pointerdown', pointerDown);
         canvas.removeEventListener('pointerup', pointerUp);
         canvas.removeEventListener('pointercancel', cancelPointer);

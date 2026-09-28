@@ -1,4 +1,7 @@
-export const JOINTS = [
+import { isRecord, isVector } from './schema-utils';
+import type { JointPose } from './scene-types';
+
+export const JOINTS: [string, string, string][] = [
   ['root', 'hips', '骨盆'], ['torso', 'spine', '腰部'], ['chest', 'chest', '胸部'],
   ['neck', 'neck', '颈部'], ['head', 'head', '头部'],
   ['leftShoulder', 'leftShoulder', '左肩'], ['leftUpperArm', 'leftUpperArm', '左上臂'],
@@ -23,15 +26,14 @@ for (const [side, sideLabel] of [['left', '左'], ['right', '右']]) {
 
 const knownJoints = new Set(JOINTS.map(([id]) => id));
 
-export function validPose(pose) {
-  if (!pose || pose.format !== 'studio-pose' || pose.version !== 1 || pose.units !== 'radians') return false;
+export function validPose(pose: unknown): pose is JointPose {
+  if (!isRecord(pose) || pose.format !== 'studio-pose' || pose.version !== 1 || pose.units !== 'radians') return false;
   if (typeof pose.rotation !== 'number' || !Number.isFinite(pose.rotation) || Math.abs(pose.rotation) > Math.PI) return false;
-  if (pose.placement != null && (typeof pose.placement !== 'object' || Array.isArray(pose.placement)
+  if (pose.placement != null && (!isRecord(pose.placement)
     || typeof pose.placement.grounded !== 'boolean' || typeof pose.placement.height !== 'number'
     || !Number.isFinite(pose.placement.height) || Math.abs(pose.placement.height) > 1000)) return false;
-  if (!pose.joints || typeof pose.joints !== 'object' || Array.isArray(pose.joints)) return false;
+  if (!isRecord(pose.joints)) return false;
   const entries = Object.entries(pose.joints);
-  return entries.length > 0 && entries.length <= JOINTS.length && entries.every(([id, values]) => knownJoints.has(id)
-    && Array.isArray(values) && values.length === 3
-    && values.every((value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= Math.PI));
+  return entries.length > 0 && entries.length <= JOINTS.length
+    && entries.every(([id, values]) => knownJoints.has(id) && isVector(values, -Math.PI, Math.PI));
 }

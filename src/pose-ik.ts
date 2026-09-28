@@ -8,8 +8,22 @@ const LIMBS = {
   rightFoot: ['rightUpperLeg', 'rightLowerLeg'],
 };
 
+interface LimbChain {
+  upper: THREE.Object3D;
+  lower: THREE.Object3D;
+  end: THREE.Object3D;
+  upperId: string;
+  lowerId: string;
+  leg: boolean;
+  sign: number;
+  solver: CCDIKSolver;
+}
+
 export class LimbIK {
-  constructor(joints, scene) {
+  target: THREE.Object3D;
+  chains: Map<string, LimbChain>;
+
+  constructor(joints: Record<string, THREE.Object3D>, scene: THREE.Object3D) {
     this.target = new THREE.Object3D();
     scene.add(this.target);
     this.chains = new Map();
@@ -32,14 +46,15 @@ export class LimbIK {
         iteration: 80,
         maxAngle: 0.35,
       };
-      const solver = new CCDIKSolver({ skeleton: { bones: [end, lower, upper, this.target] } }, [config]);
+      const solverMesh = { skeleton: { bones: [end, lower, upper, this.target] } };
+      const solver = new CCDIKSolver(solverMesh as THREE.SkinnedMesh, [config]);
       this.chains.set(endId, { upper, lower, end, upperId, lowerId, leg, sign, solver });
     }
   }
 
-  solve(id, position) {
+  solve(id: string, position: THREE.Vector3): string[] {
     const chain = this.chains.get(id);
-    if (!chain || !position.toArray().every(Number.isFinite)) return [];
+    if (!chain || !chain.end.parent || !this.target.parent || !position.toArray().every(Number.isFinite)) return [];
     const { upper, lower, end, leg, sign, solver } = chain;
     upper.updateWorldMatrix(true, true);
     const rootPosition = upper.getWorldPosition(new THREE.Vector3());
@@ -60,7 +75,7 @@ export class LimbIK {
     lower.rotation.set(leg ? bend : 0, leg ? 0 : bend * sign, 0);
     lower.updateMatrixWorld(true);
     solver.update();
-    const parentOrientation = end.parent.getWorldQuaternion(new THREE.Quaternion());
+    const parentOrientation = chain.end.parent.getWorldQuaternion(new THREE.Quaternion());
     end.quaternion.copy(parentOrientation.invert().multiply(endOrientation));
     end.updateMatrixWorld(true);
     return [chain.upperId, chain.lowerId, id];

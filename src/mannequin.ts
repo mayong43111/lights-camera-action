@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { VRM, VRMHumanoid } from '@pixiv/three-vrm';
 
-export function createMannequin(scene) {
-  const names = {
+export function createMannequin(scene: THREE.Object3D) {
+  const names: Record<string, string> = {
     hips: 'pelvis', spine: 'spine_01', chest: 'spine_02', upperChest: 'spine_03',
     neck: 'neck_01', head: 'Head',
   };
@@ -17,7 +17,7 @@ export function createMannequin(scene) {
   }
   const bones = Object.fromEntries(Object.entries(names).map(([name, source]) => {
     const node = scene.getObjectByName(source);
-    if (!node?.isBone) throw new Error(`白模缺少骨骼：${source}`);
+    if (!(node instanceof THREE.Bone)) throw new Error(`白模缺少骨骼：${source}`);
     return [name, { node }];
   }));
   const root = new THREE.Group();
@@ -34,11 +34,18 @@ export function createMannequin(scene) {
       const endpoint = bones[`${side}${child}`].node;
       const current = endpoint.getWorldPosition(new THREE.Vector3()).sub(bone.getWorldPosition(new THREE.Vector3())).normalize();
       const rotation = new THREE.Quaternion().setFromUnitVectors(current, direction).multiply(bone.getWorldQuaternion(new THREE.Quaternion()));
+      if (!bone.parent) throw new Error(`白模骨骼缺少父节点：${bone.name}`);
       bone.quaternion.copy(bone.parent.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(rotation));
       root.updateMatrixWorld(true);
     }
   }
-  const humanoid = new VRMHumanoid(bones);
+  const humanoid = new VRMHumanoid({ ...bones,
+    hips: bones.hips, spine: bones.spine, head: bones.head,
+    leftUpperArm: bones.leftUpperArm, leftLowerArm: bones.leftLowerArm, leftHand: bones.leftHand,
+    rightUpperArm: bones.rightUpperArm, rightLowerArm: bones.rightLowerArm, rightHand: bones.rightHand,
+    leftUpperLeg: bones.leftUpperLeg, leftLowerLeg: bones.leftLowerLeg, leftFoot: bones.leftFoot,
+    rightUpperLeg: bones.rightUpperLeg, rightLowerLeg: bones.rightLowerLeg, rightFoot: bones.rightFoot,
+  });
   root.add(humanoid.normalizedHumanBonesRoot);
   return new VRM({
     scene: root,

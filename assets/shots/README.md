@@ -1,6 +1,6 @@
 # 内置手动组合
 
-20 组摄影组合在 `src/shot-presets.js` 中手工编排，引用 `assets/poses/library.json` 的既有姿势。不是照片识别数据，不使用已被否定的 AI 结果，也不调用云端模型。
+20 组摄影组合在 [src/shot-presets.ts](../../src/shot-presets.ts) 中手工编排，引用 `assets/poses/library.json` 的既有姿势。不是照片识别数据，不使用已被否定的 AI 结果，也不调用云端模型。
 
 | 分类 | 组合 |
 | --- | --- |

@@ -1,13 +1,40 @@
 import { Vector2 } from 'three';
+import type { PerspectiveCamera, WebGLRenderer } from 'three';
+import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { createLifetime } from './lifetime';
 
-export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, setHelpersVisible = () => {}, root = document, Recorder = globalThis.MediaRecorder }) {
+export interface CaptureOptions {
+  renderer: Pick<WebGLRenderer, 'getSize' | 'getPixelRatio' | 'setPixelRatio' | 'setSize' | 'domElement'>;
+  composer: Pick<EffectComposer, 'setSize' | 'render'>;
+  camera: Pick<PerspectiveCamera, 'aspect' | 'updateProjectionMatrix'>;
+  character: { vrm: unknown; editing: boolean; setEditing(enabled: boolean): void; update(delta: number): void };
+  floorMarks: { visible: boolean };
+  getAspect(): number;
+  isLoading(): boolean;
+  onPhoto(dataUrl: string, name: string): unknown;
+  onResize(): void;
+  announce(message: string): void;
+  setHelpersVisible?(visible: boolean): void;
+  root?: ParentNode;
+  Recorder?: typeof MediaRecorder;
+}
+
+export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, setHelpersVisible = () => {}, root = document, Recorder = globalThis.MediaRecorder }: CaptureOptions) {
+  const lifetime = createLifetime();
   let takeNumber = 1;
-  let recorder = null;
-  let recordingTimer = null;
-  let restoreRecordingUi = null;
-  let finishRecording = null;
+  let recorder: MediaRecorder | null = null;
+  let recordingTimer: number | null = null;
+  let restoreRecordingUi: (() => void) | null = null;
+  let finishRecording: (() => boolean) | null = null;
+  let disposed = false;
+  function element<ElementType extends HTMLElement = HTMLElement>(selector: string): ElementType {
+    const node = root.querySelector<ElementType>(selector);
+    if (!node) throw new Error(`Missing capture element: ${selector}`);
+    return node;
+  }
 
-  function takePhoto({ archive = true, download } = {}) {
+  function takePhoto({ archive = true, download }: { archive?: boolean; download?: boolean } = {}) {
+    if (disposed) return;
     if (download === false) archive = false;
     if (isLoading() || !character.vrm) {
       announce('人偶正在加载，请稍后再拍摄');
@@ -23,7 +50,7 @@ export function createCaptureController({ renderer, composer, camera, character,
     const previousSize = renderer.getSize(new Vector2());
     const previousRatio = renderer.getPixelRatio();
     const previousAspect = camera.aspect;
-    const overlay = root.querySelector('.viewfinder');
+    const overlay = element('.viewfinder');
     const overlayHidden = overlay.hidden;
     const wasEditing = character.editing;
     const marksVisible = floorMarks.visible;
@@ -43,9 +70,9 @@ export function createCaptureController({ renderer, composer, camera, character,
       const dataUrl = renderer.domElement.toDataURL('image/png');
       const name = archive ? `lights-camera-${Date.now()}-take-${String(takeNumber).padStart(2, '0')}.png` : '当前场景.png';
       if (archive) {
-        Promise.resolve(onPhoto(dataUrl, name)).catch(error => announce(error.message || '相册保存失败，请重试。'));
+        Promise.resolve(onPhoto(dataUrl, name)).catch(error => announce(error instanceof Error ? error.message : '相册保存失败，请重试。'));
         takeNumber += 1;
-        root.querySelector('#take-number').textContent = String(takeNumber).padStart(2, '0');
+        element('#take-number').textContent = String(takeNumber).padStart(2, '0');
       }
       return { image: dataUrl, name };
     } finally {
@@ -63,7 +90,7 @@ export function createCaptureController({ renderer, composer, camera, character,
 
   function startRecordingUi() {
     const wasEditing = character.editing;
-    const lockedControls = [...root.querySelectorAll('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, #shot-apply, #prop-controls input, #prop-controls select, #prop-controls button, [data-aspect]')];
+    const lockedControls = [...root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, #shot-apply, #prop-controls input, #prop-controls select, #prop-controls button, [data-aspect]')];
     const disabledStates = lockedControls.map((control) => control.disabled);
     restoreRecordingUi = () => {
       character.setEditing(wasEditing);
@@ -73,38 +100,40 @@ export function createCaptureController({ renderer, composer, camera, character,
     character.setEditing(false);
     setHelpersVisible(false);
     lockedControls.forEach((control) => { control.disabled = true; });
-    const button = root.querySelector('#record-button');
+    const button = element<HTMLButtonElement>('#record-button');
     button.classList.add('is-recording');
     button.setAttribute('aria-label', '停止录制');
     button.title = '停止录制';
-    root.querySelector('#record-label').textContent = '停止录制';
-    root.querySelector('#record-time').textContent = '00:00';
-    root.querySelector('#recording-indicator').hidden = false;
+    element('#record-label').textContent = '停止录制';
+    element('#record-time').textContent = '00:00';
+    element('#recording-indicator').hidden = false;
     const startedAt = Date.now();
     recordingTimer = window.setInterval(() => {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      root.querySelector('#record-time').textContent = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+      element('#record-time').textContent = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
     }, 250);
   }
 
   function stopRecordingUi() {
     restoreRecordingUi?.();
     restoreRecordingUi = null;
-    clearInterval(recordingTimer);
+    if (recordingTimer !== null) clearInterval(recordingTimer);
     recordingTimer = null;
-    const button = root.querySelector('#record-button');
+    if (disposed) return;
+    const button = element<HTMLButtonElement>('#record-button');
     button.disabled = false;
     button.classList.remove('is-recording');
     button.setAttribute('aria-label', '录制视频');
     button.title = '录制视频';
-    root.querySelector('#record-label').textContent = '录制视频';
-    root.querySelector('#recording-indicator').hidden = true;
+    element('#record-label').textContent = '录制视频';
+    element('#recording-indicator').hidden = true;
     onResize();
   }
 
   function toggleRecording() {
+    if (disposed) return;
     if (recorder?.state === 'recording') {
-      root.querySelector('#record-button').disabled = true;
+      element<HTMLButtonElement>('#record-button').disabled = true;
       try {
         recorder.stop();
       } catch (error) {
@@ -124,8 +153,8 @@ export function createCaptureController({ renderer, composer, camera, character,
       announce('当前浏览器不支持 WebM 编码，请使用 Chrome 或 Edge');
       return;
     }
-    const chunks = [];
-    let stream;
+    const chunks: Blob[] = [];
+    let stream: MediaStream | undefined;
     let finished = false;
     function finish() {
       if (finished) return false;
@@ -151,12 +180,12 @@ export function createCaptureController({ renderer, composer, camera, character,
           announce('未捕获到视频，请延长录制时间后重试');
           return;
         }
-        const url = URL.createObjectURL(blob);
+        const url = lifetime.objectUrl(blob);
         const link = document.createElement('a');
         link.download = `lights-camera-recording-${Date.now()}.webm`;
         link.href = url;
         link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        lifetime.timeout(() => lifetime.releaseUrl(url), 1000);
         announce('视频已导出为 WebM');
       });
       activeRecorder.addEventListener('error', () => {
@@ -171,5 +200,17 @@ export function createCaptureController({ renderer, composer, camera, character,
     }
   }
 
-  return { takePhoto, toggleRecording, get isRecording() { return recorder !== null; } };
+  return {
+    takePhoto, toggleRecording, get isRecording() { return recorder !== null; },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      lifetime.dispose();
+      const active = recorder;
+      finishRecording?.();
+      if (active && active.state !== 'inactive') {
+        try { active.stop(); } catch {}
+      }
+    },
+  };
 }

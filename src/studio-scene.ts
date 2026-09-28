@@ -1,6 +1,16 @@
 import * as THREE from 'three';
+import type { LightId, Vector3Tuple } from './scene-types';
 
-export const LIGHT_DEFINITIONS = [
+export interface LightDefinition {
+  id: LightId;
+  name: string;
+  index: string;
+  intensity: number;
+  color: string;
+  position: Vector3Tuple;
+}
+
+export const LIGHT_DEFINITIONS: LightDefinition[] = [
   { id: 'key', name: '主光', index: 'A', intensity: 7, color: '#fff0d6', position: [-4.2, 4.5, 4.2] },
   { id: 'fill', name: '辅光', index: 'B', intensity: 3.2, color: '#d8e9ff', position: [4.5, 3.5, 3.3] },
   { id: 'rim', name: '轮廓光', index: 'C', intensity: 5.5, color: '#ffffff', position: [0.5, 4.8, -3.4] },
@@ -15,9 +25,9 @@ export function createStudio() {
     profile.push({ height: 1.2 * (1 - Math.cos(angle)), depth: -3.75 - 1.2 * Math.sin(angle), normalY: Math.cos(angle), normalZ: Math.sin(angle) });
   }
   profile.push({ height: 7, depth: -4.95, normalY: 0, normalZ: 1 });
-  const positions = [];
-  const normals = [];
-  const indices = [];
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
   profile.forEach((point, row) => {
     positions.push(-7, point.height, point.depth, 7, point.height, point.depth);
     normals.push(0, point.normalY, point.normalZ, 0, point.normalY, point.normalZ);
@@ -53,7 +63,7 @@ export function createStudio() {
   return { group, material: backdropMaterial, photoBackdrop, floorMarks };
 }
 
-export function createStudioLight(definition, shadowMapSize = 2048) {
+export function createStudioLight(definition: LightDefinition, shadowMapSize = 2048) {
   const group = new THREE.Group();
   const light = new THREE.SpotLight(definition.color, definition.intensity * 8, 18, 0.62, 0.72, 1.25);
   light.position.set(...definition.position);

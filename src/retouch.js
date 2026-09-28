@@ -1,3 +1,5 @@
+import { createImagePreview } from './image-preview';
+
 const defaultPrompt = '生成自然真实的服装摄影作品。以原图为姿势、身体比例、构图、拍摄角度和光照依据；使用人物图的面部特征和发型，使用服装图的款式、颜色、面料、图案与细节，让服装自然贴合原图姿态，形成合理的褶皱与阴影。不要照搬参考图的姿势、背景或服装图中模特的脸。保持手部结构自然。未上传人物图时保留原图人物；未上传服装图时沿用人物图的衣着，没有人物图则保留原图衣着。';
 
 const messages = {
@@ -50,6 +52,8 @@ export function createRetouch(capturePhoto, { client, library }) {
   const generate = document.querySelector('#retouch-generate');
   const consent = document.querySelector('#retouch-consent');
   const preview = document.querySelector('#retouch-preview-image');
+  const previewOpen = document.querySelector('#retouch-preview-open');
+  const imagePreview = createImagePreview();
   let source = null;
   const references = { reference: null, garment: null };
   const referenceIds = { referenceId: null, garmentId: null };
@@ -130,6 +134,9 @@ export function createRetouch(capturePhoto, { client, library }) {
     if (image && preview.getAttribute('src') !== image) preview.src = image;
     if (!image) preview.removeAttribute('src');
     preview.alt = view === 'result' ? 'AI 修图结果' : '修图原图';
+    previewOpen.hidden = !image;
+    previewOpen.title = `放大预览${preview.alt}`;
+    previewOpen.setAttribute('aria-label', previewOpen.title);
     document.querySelector('#retouch-empty').hidden = !!image;
     document.querySelector('#retouch-result-tab').textContent = result && resultSourceVersion !== sourceVersion ? '上次修图结果' : '修图结果';
     document.querySelector('#retouch-preview').setAttribute('aria-labelledby', view === 'result' ? 'retouch-result-tab' : 'retouch-original-tab');
@@ -144,10 +151,12 @@ export function createRetouch(capturePhoto, { client, library }) {
       if (!image) referencePreview.removeAttribute('src');
       document.querySelector(`#retouch-${kind}-empty`).hidden = !!image;
       const upload = document.querySelector(`#retouch-${kind}-import`);
-      const label = `${image ? '更换' : '添加'}${referenceNames[kind]}`;
+      const label = `${image ? '预览' : '添加'}${referenceNames[kind]}`;
       upload.setAttribute('aria-label', label);
       upload.title = label;
       document.querySelector(`#retouch-${kind}-clear`).disabled = !image || busy || loading;
+      document.querySelector(`#retouch-${kind}-replace`).hidden = !image;
+      document.querySelector(`#retouch-${kind}-replace`).disabled = busy || loading;
     }
     document.querySelector('#retouch-fields').disabled = busy || loading || !preferencesReady;
     clearPrompt.disabled = busy || loading || !prompt.value;
@@ -211,6 +220,7 @@ export function createRetouch(capturePhoto, { client, library }) {
     }
   });
   document.querySelector('#retouch-close').addEventListener('click', () => dialog.close());
+  previewOpen.addEventListener('click', () => imagePreview.open(view === 'result' ? result : source, preview.alt));
   dialog.addEventListener('close', () => document.querySelector('#retouch-open').focus({ preventScroll: true }));
   document.querySelector('#retouch-config-refresh').addEventListener('click', checkConfig);
   document.querySelector('#retouch-latest').addEventListener('click', () => setSource(latestPhoto.image, latestPhoto.name));
@@ -230,7 +240,11 @@ export function createRetouch(capturePhoto, { client, library }) {
   });
   for (const kind of ['source', 'reference', 'garment']) {
     const input = document.querySelector(`#retouch-${kind}-input`);
-    document.querySelector(`#retouch-${kind}-import`).addEventListener('click', () => input.click());
+    document.querySelector(`#retouch-${kind}-import`).addEventListener('click', () => {
+      if (kind !== 'source' && references[kind]) imagePreview.open(references[kind], referenceNames[kind]);
+      else input.click();
+    });
+    if (kind !== 'source') document.querySelector(`#retouch-${kind}-replace`).addEventListener('click', () => input.click());
     input.addEventListener('change', async () => {
       const file = input.files[0];
       input.value = '';

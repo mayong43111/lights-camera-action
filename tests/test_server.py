@@ -2,16 +2,194 @@ import base64
 import hashlib
 import io
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+import re
 import unittest
+from urllib.parse import parse_qs, urlsplit
 from unittest.mock import patch, MagicMock
 
 from PIL import Image
 import requests
 import server
+import auth
+from cachelib import FileSystemCache
+import msal
+
+
+class AuthenticationTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.origin = 'https://studio.test'
+        self.tenant = '11111111-1111-4111-8111-111111111111'
+        self.application = '22222222-2222-4222-8222-222222222222'
+        self.owner = '33333333-3333-4333-8333-333333333333'
+        config = patch.dict(server.app.config, STUDIO_DATA=Path(directory.name), STUDIO_AUTH_ENABLED=True,
+                            STUDIO_ORIGIN=self.origin, SESSION_COOKIE_SECURE=True,
+                            SESSION_COOKIE_NAME='__Host-studio-session', ENTRA_TENANT_ID=self.tenant,
+                            ENTRA_CLIENT_ID=self.application, ENTRA_CLIENT_SECRET='offline-test-secret',
+                            ENTRA_ADMIN_USER_IDS=[self.owner])
+        config.start()
+        self.addCleanup(config.stop)
+        cache = patch.object(server.app.session_interface, 'cache', FileSystemCache(directory.name + '/sessions'))
+        cache.start()
+        self.addCleanup(cache.stop)
+        for limiter in server.app.extensions['limiter']:
+            limiter.reset()
+        self.client = server.app.test_client()
+
+    def form(self, client=None):
+        response = (client or self.client).get('/login', base_url=self.origin)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers['Referrer-Policy'], 'same-origin')
+        self.assertNotIn('auth-preview.png', response.text)
+        self.assertNotIn('class="preview"', response.text)
+        self.assertIn('/auth/entra', response.text)
+        self.assertIn('type="password"', response.text)
+        return re.search(r'name="csrf" value="([^"]+)"', response.text).group(1)
+
+    def create_user(self, username='test-user'):
+        with server.app.app_context(), auth.database() as connection:
+            connection.execute("INSERT INTO users (id, username, name, provider, password_hash) VALUES (?, ?, ?, 'local', ?)",
+                               ('local:' + username, username, username, auth.PASSWORDS.hash('test-password-123')))
+
+    def login(self, username='test-user', client=None):
+        client = client or self.client
+        csrf = self.form(client)
+        result = client.post('/auth/login', base_url=self.origin, headers={'Origin': self.origin},
+                             data={'csrf': csrf, 'username': username, 'password': 'test-password-123'})
+        self.assertEqual(result.status_code, 302)
+        token = client.get('/api/ai/status', base_url=self.origin).json['token']
+        return {'Origin': self.origin, 'X-Studio-Token': token}
+
+    def test_anonymous_and_forged_platform_headers_are_rejected(self):
+        for path in ('/api/ai/status', '/api/ai/analyze/status', '/api/data/assets?kind=photo'):
+            response = self.client.get(path, base_url=self.origin, headers={'X-MS-CLIENT-PRINCIPAL': 'forged'})
+            self.assertEqual(response.status_code, 401)
+        self.assertEqual(self.client.get('/', base_url=self.origin).location, '/login')
+        self.assertEqual(self.client.get('/healthz', base_url='http://internal-probe').status_code, 200)
+
+    def test_password_origin_csrf_rotation_logout_and_replay(self):
+        self.create_user()
+        csrf = self.form()
+        old_cookie = self.client.get_cookie('__Host-studio-session', domain='studio.test').value
+        payload = {'csrf': csrf, 'username': 'test-user', 'password': 'test-password-123'}
+        self.assertEqual(self.client.post('/auth/login', base_url=self.origin, data=payload).status_code, 403)
+        self.assertEqual(self.client.post('/auth/login', base_url=self.origin, headers={'Origin': self.origin}, data={**payload, 'csrf': 'bad'}).status_code, 403)
+        headers = self.login()
+        cookie = self.client.get_cookie('__Host-studio-session', domain='studio.test')
+        self.assertNotEqual(cookie.value, old_cookie)
+        self.assertTrue(cookie.secure)
+        self.assertTrue(cookie.http_only)
+        self.assertEqual(cookie.same_site, 'Lax')
+        self.assertEqual(self.client.get('/api/data/settings/scene', base_url=self.origin).status_code, 403)
+        self.assertEqual(self.client.post('/auth/logout', base_url=self.origin, headers=headers).status_code, 302)
+        self.client.set_cookie('__Host-studio-session', cookie.value, domain='studio.test')
+        self.assertEqual(self.client.get('/api/ai/status', base_url=self.origin).status_code, 401)
+
+    def test_wrong_password_and_login_rate_limit(self):
+        self.create_user()
+        csrf = self.form()
+        for attempt in range(8):
+            response = self.client.post('/auth/login', base_url=self.origin, headers={'Origin': self.origin},
+                                        data={'csrf': csrf, 'username': 'test-user', 'password': 'wrong'})
+            self.assertEqual(response.status_code, 401)
+        response = self.client.post('/auth/login', base_url=self.origin, headers={'Origin': self.origin},
+                                    data={'csrf': csrf, 'username': 'test-user', 'password': 'wrong'})
+        self.assertEqual(response.status_code, 429)
+
+    def test_user_settings_assets_and_stale_page_are_isolated(self):
+        self.create_user('user-one')
+        self.create_user('user-two')
+        first = self.login('user-one')
+        second_client = server.app.test_client()
+        second = self.login('user-two', second_client)
+        payload = {'revision': 0, 'value': {'version': 1, 'state': {'private': True}}}
+        self.assertEqual(self.client.post('/api/data/settings/scene', base_url=self.origin, headers=first, json=payload).status_code, 200)
+        self.assertIsNone(second_client.get('/api/data/settings/scene', base_url=self.origin, headers=second).json['value'])
+        image = io.BytesIO()
+        Image.new('RGB', (8, 8), 'white').save(image, format='PNG')
+        uploaded = self.client.post('/api/data/assets', base_url=self.origin, headers=first,
+                                   json={'kind': 'photo', 'name': 'private.png', 'image': 'data:image/png;base64,' + base64.b64encode(image.getvalue()).decode()})
+        identifier = uploaded.json['id']
+        self.assertEqual(second_client.get('/api/data/assets/' + identifier, base_url=self.origin, headers=second).status_code, 404)
+        self.assertEqual(second_client.post('/api/data/assets/' + identifier + '/delete', base_url=self.origin, headers=second, json={}).status_code, 404)
+        response = second_client.get('/api/ai/status', base_url=self.origin, headers={'X-Studio-User': 'local:user-one'})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.headers['X-Studio-Session-Changed'], '1')
+
+    def test_admin_create_reset_and_session_revocation(self):
+        self.create_user()
+        headers = self.login()
+        payload = {'username': 'created-user', 'name': 'Created', 'password': 'another-password-123'}
+        self.assertEqual(self.client.post('/account/users', base_url=self.origin, headers=headers, data=payload).status_code, 403)
+        admin = server.app.test_client()
+        identifier = 'entra:' + self.tenant + ':' + self.owner
+        with server.app.app_context(), auth.database() as connection:
+            connection.execute("INSERT INTO users (id, name, provider) VALUES (?, 'Admin', 'entra')", (identifier,))
+        with admin.session_transaction(base_url=self.origin) as state:
+            state.update(_user_id=identifier + '|1', expires=time.time() + 1000, csrf='admin-test-csrf')
+        admin_headers = {'Origin': self.origin, 'X-Studio-Token': 'admin-test-csrf'}
+        self.assertEqual(admin.post('/account/users', base_url=self.origin, headers=admin_headers, data=payload).status_code, 302)
+        self.assertEqual(admin.post('/account/users', base_url=self.origin, headers=admin_headers, data=payload).status_code, 409)
+        self.assertEqual(admin.post('/account/users', base_url=self.origin, headers=admin_headers,
+                                    data={**payload, 'username': 'test-user', 'reset': 'on'}).status_code, 302)
+        self.assertEqual(self.client.get('/api/ai/status', base_url=self.origin).status_code, 401)
+
+    def test_real_msal_pkce_nonce_state_tenant_and_replay(self):
+        fixture = self
+        class IdentityHttp:
+            nonce = ''
+            bad_nonce = False
+            bad_tenant = False
+            calls = 0
+
+            def get(self, url, **kwargs):
+                authority = f'https://login.microsoftonline.com/{fixture.tenant}/v2.0'
+                return MagicMock(status_code=200, text=json.dumps({'authorization_endpoint': authority + '/authorize',
+                    'token_endpoint': authority + '/token', 'issuer': authority}))
+
+            def post(self, url, **kwargs):
+                self.calls += 1
+                claims = {'aud': fixture.application, 'iss': f'https://login.microsoftonline.com/{fixture.tenant}/v2.0',
+                          'iat': int(time.time()), 'exp': int(time.time()) + 600, 'sub': fixture.owner, 'oid': fixture.owner,
+                          'tid': 'wrong' if self.bad_tenant else fixture.tenant, 'nonce': 'wrong' if self.bad_nonce else self.nonce}
+                encode = lambda value: base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip('=')
+                token = encode({'alg': 'RS256'}) + '.' + encode(claims) + '.c2ln'
+                return MagicMock(status_code=200, text=json.dumps({'id_token': token, 'access_token': 'offline-fixture', 'token_type': 'Bearer', 'expires_in': 600}))
+
+        transport = IdentityHttp()
+        client = msal.ConfidentialClientApplication(self.application, authority=f'https://login.microsoftonline.com/{self.tenant}',
+                                                  client_credential='fixture', http_client=transport, instance_discovery=False)
+        with patch('auth.entra_client', return_value=client):
+            for bad in ('state', 'nonce', 'tenant', None):
+                transport.bad_nonce = bad == 'nonce'
+                transport.bad_tenant = bad == 'tenant'
+                start = self.client.get('/auth/entra', base_url=self.origin)
+                query = parse_qs(urlsplit(start.location).query)
+                self.assertEqual(query['code_challenge_method'], ['S256'])
+                transport.nonce = query['nonce'][0]
+                callback = '/auth/callback?code=fixture&state=' + ('wrong' if bad == 'state' else query['state'][0])
+                outsider = server.app.test_client()
+                self.assertIn('failed', outsider.get(callback, base_url=self.origin).location)
+                response = self.client.get(callback, base_url=self.origin)
+                if bad:
+                    self.assertIn('failed', response.location)
+                    self.assertEqual(self.client.get('/api/ai/status', base_url=self.origin).status_code, 401)
+                else:
+                    self.assertEqual(response.location, '/')
+                    self.assertTrue(self.client.get('/api/auth/session', base_url=self.origin).json['user']['admin'])
+                self.assertIn('failed', self.client.get(callback, base_url=self.origin).location)
+
+    def test_cloud_startup_refuses_missing_auth_configuration(self):
+        from flask import Flask
+        with self.assertRaises(ValueError):
+            auth.configure_auth(Flask('incomplete'), {'WEBSITE_HOSTNAME': 'studio.azurewebsites.net'})
 
 
 class ImageEditTests(unittest.TestCase):
@@ -35,6 +213,12 @@ class ImageEditTests(unittest.TestCase):
         return self.client.post('/api/ai/edit', base_url=self.origin,
                                 json=self.payload if payload is None else payload,
                                 headers={'X-Studio-Token': server.TOKEN, **(headers or {})})
+
+    def test_hosted_anonymous_clients_cannot_obtain_api_tokens(self):
+        with patch.dict(server.app.config, STUDIO_AUTH_ENABLED=True):
+            response = self.client.get('/api/ai/status', base_url=self.origin)
+        self.assertEqual(response.status_code, 401)
+        self.assertNotIn('token', response.get_json())
 
     def azure_response(self, status=200, data=None):
         response = MagicMock()
@@ -317,12 +501,30 @@ class ImageEditTests(unittest.TestCase):
 
     def test_private_files_and_traversal(self):
         for path in ('/.env', '/.env.example', '/server.py', '/requirements.txt', '/.git/config',
-                     '/assets/../.env', '/src/../../server.py', '/assets/characters/README.md'):
+                     '/assets/../.env', '/src/../../server.py', '/assets/characters/README.md',
+                     '/src/main.js', '/src/main.tsx', '/src/studio-controller.ts'):
             self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404, path)
         with self.client.get('/', base_url=self.origin) as response:
             self.assertEqual(response.status_code, 200)
         with self.client.head('/src/main.js', base_url=self.origin) as response:
-            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.status_code, 404)
+
+    def test_compiled_frontend_allowlist_and_missing_build(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(server, 'ROOT', Path(directory)):
+            self.assertEqual(self.client.get('/', base_url=self.origin).status_code, 503)
+            build = Path(directory) / 'dist'
+            (build / 'static').mkdir(parents=True)
+            (build / 'index.html').write_text('<div id="root"></div>', encoding='utf-8')
+            (build / 'static' / 'app.js').write_text('export {};', encoding='utf-8')
+            (build / 'static' / '.secret.js').write_text('private', encoding='utf-8')
+            with self.client.get('/', base_url=self.origin) as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('id="root"', response.text)
+            with self.client.get('/static/app.js', base_url=self.origin) as response:
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.mimetype, 'text/javascript')
+            for path in ('/static/.secret.js', '/static/../index.html', '/static/missing.js', '/dist/index.html'):
+                self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404, path)
 
     def test_azure_errors_are_sanitized(self):
         for status in (400, 401, 403, 404, 429, 500, 302):
@@ -393,9 +595,25 @@ class ImageEditTests(unittest.TestCase):
             self.assertEqual(self.client.get(path, base_url=self.origin).status_code, 404)
         with self.client.get('/', base_url=self.origin) as response:
             self.assertNotIn('https://', response.text)
-            for entrypoint in ('three/build/three.module.js', 'three/examples/jsm/',
-                               'three-vrm/lib/three-vrm.module.min.js', 'lucide/dist/umd/lucide.min.js'):
-                self.assertIn(f'./assets/vendor/{entrypoint}', response.text)
+            class Entrypoints(HTMLParser):
+                def __init__(self):
+                    super().__init__()
+                    self.paths = []
+
+                def handle_starttag(self, tag, attributes):
+                    attributes = dict(attributes)
+                    if tag == 'script' and attributes.get('type') == 'module':
+                        self.paths.append(attributes['src'])
+                    if tag == 'link' and attributes.get('rel') == 'stylesheet':
+                        self.paths.append(attributes['href'])
+
+            parser = Entrypoints()
+            parser.feed(response.text)
+            self.assertGreaterEqual(len(parser.paths), 2)
+            for entrypoint in parser.paths:
+                self.assertTrue(entrypoint.startswith('/static/'))
+                with self.client.get(entrypoint, base_url=self.origin) as compiled:
+                    self.assertEqual(compiled.status_code, 200)
 
     def test_dotenv_and_environment_precedence(self):
         with patch('server.dotenv_values', return_value={'AZURE_OPENAI_ENDPOINT': self.config['endpoint'], 'AZURE_OPENAI_API_KEY': 'file-key'}), patch.dict(server.os.environ, {}, clear=True):

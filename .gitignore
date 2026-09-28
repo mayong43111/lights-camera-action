@@ -3,6 +3,9 @@
 !.env.example
 .vscode/
 node_modules/
+dist/
+test-results/
+playwright-report/
 .venv/
 .studio-data/
 __pycache__/

@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { createMannequin } from '../src/mannequin.js';
-import { Character } from '../src/character.js';
-import { JOINTS, validPose } from '../src/pose-schema.js';
-import { validatePoseLibrary } from '../src/pose-library.js';
+import { createMannequin } from '../src/mannequin';
+import { Character } from '../src/character';
+import { JOINTS, validPose } from '../src/pose-schema';
+import { validatePoseLibrary } from '../src/pose-library';
 
 const sourceHash = '69591853d817488edaa8fd9bf8fc1d821eaeaf789f8627b3cd23b41c4ed67997';
 

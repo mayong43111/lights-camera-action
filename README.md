@@ -1,6 +1,6 @@
 # 灯光、摄影、开拍
 
-一个零构建的 3D 虚拟摄影棚沙盒。没有评分或任务，自由摆姿、布光、布景和拍摄。
+一个基于 TypeScript、React、Ant Design 和 Three.js 的 3D 虚拟摄影棚沙盒，Python/Flask 提供认证、存储与 AI 接口。没有评分或任务，自由摆姿、布光、布景和拍摄。
 
 ![摄影棚总览：白模、道具变换控件与镜头参数](assets/screenshots/studio-props-edit.png)
 
@@ -10,11 +10,12 @@
 
 ## 运行
 
-需要 Python 3.10 或更新版本，无需 Node.js 或管理员权限。首次在项目目录的 PowerShell 终端安装本地依赖：
+需要 Python 3.10+ 和 Node.js 22.12+，无需管理员权限。首次在项目目录的 PowerShell 终端安装依赖：
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+npm ci
 ```
 
 之后运行：
@@ -23,17 +24,27 @@ python -m venv .venv
 .\start.ps1
 ```
 
-启动器自动打开默认浏览器，默认地址为 http://127.0.0.1:4173/；端口占用时自动改用后续端口，以终端输出为准。按 Ctrl+C 停止。若本机策略阻止执行脚本，可直接运行 `.\.venv\Scripts\python.exe server.py`；不要更改系统安全策略。
+启动器先执行类型检查与生产构建，再自动打开浏览器，默认地址为 http://127.0.0.1:4173/；端口占用时自动改用后续端口，以终端输出为准。按 Ctrl+C 停止。若本机策略阻止执行脚本，先运行 `npm run build`，再执行 `.\.venv\Scripts\python.exe server.py`；不要更改系统安全策略。缺少构建时 Python 页面返回 503 和构建提示。
 
-3D 摄影棚可在静态托管平台渲染，但配置持久化、相册、素材库和 AI 修图需要本地 Python 服务。服务只监听本机，不适合直接暴露到公网。普通浏览器可能限制 `file://` 模块加载，因此建议始终使用 HTTP。Three.js、three-vrm、Lucide 及其所需模块均已放在 `assets/vendor/`，人物模型、缩略图和姿势数据也随项目提供；普通摄影棚及本地数据功能无需联网，不再请求 CDN。AI 修图仍需连接 Azure，首次安装 Python 依赖也需要联网。
+开发时分别在两个终端运行 Python 服务与 `npm run dev`，浏览器打开 http://127.0.0.1:4178/。Vite 将 API 和账户请求代理到默认的 4173 端口；后端使用其他端口时设置 `STUDIO_API_URL`。涉及认证回调的验收使用 Python 同源生产地址。开发更新使用完整页面重载，确保每页只创建一套 WebGL 控制器。
 
-浏览器依赖版本固定为 Three.js 0.180.0、three-vrm 3.5.5、Lucide 0.468.0。各包许可证保留在对应目录，来源、包完整性和文件 SHA-256 记录在 [资源清单](assets/vendor/manifest.json)。需要重新下载时运行：
+页面与 API 需要 Python 服务，不能直接以 `file://` 打开。默认服务只监听本机。React、Ant Design、Three.js、three-vrm 和 Lucide 从 npm 安装后由 Vite 本地打包，不运行时请求 CDN；模型、缩略图和姿势数据随项目提供。首次安装依赖需要联网，普通摄影棚及本地数据功能在安装构建后无需联网，AI 修图仍需连接 Azure。
+
+Three.js 0.180.0、three-vrm 3.5.5、Lucide 0.468.0 保持原版本，其他依赖由 [package-lock.json](package-lock.json) 锁定。原有 vendor 文件和许可证仍保留用于独立实验，主应用不再通过 import map 加载它们。资源来源见 [资源清单](assets/vendor/manifest.json)。仅需更新旧实验资源时运行：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts/vendor_dependencies.py --proxy http://127.0.0.1:1080
 ```
 
 此脚本只通过指定代理下载固定版本的 npm 包，验证完整性并提取使用到的模块及其依赖，不修改系统或浏览器代理设置。新增第三方模块时，在脚本的入口列表中补充模块后重跑；日常启动无需执行下载。
+
+## 云端与认证
+
+线上地址：https://web-lights-camera-action-46df95.azurewebsites.net/
+
+Azure App Service Linux **F1 / Free**，支持当前 Entra 租户用户登录与独立账号密码登录。指定 Entra 管理员通过顶部账户入口创建或重置密码账户，没有公开注册。配置、相册和个人组合按用户隔离；浏览器自存姿势按身份分开，不跨设备同步。免费的是 Web App 托管，AI 模型调用仍可能计费。部署参数、维护与验证范围见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+默认回环地址开发模式不要求登录。可设置 `AUTH_ORIGIN=http://127.0.0.1:4173` 测试认证，必须使用同一端口；Azure 根据平台 `WEBSITE_HOSTNAME` 强制认证，配置缺失时拒绝启动。当前入口需要 Python 提供认证状态接口，不能仅用静态文件托管；上面的本机监听限制仅针对默认开发启动器。
 
 ## 本地保存与相册
 
@@ -86,6 +97,8 @@ AZURE_OPENAI_VISION_API_VERSION=2024-10-21
 
 截图展示修图前的原图预览与参数设置，未上传参考图、未发起生成，不代表 AI 生成效果。真实修图需配置 Azure 并明确同意上传与计费。
 
+点击原图、修图结果、已选人物图或服装图可打开大图预览，支持滚轮/按钮缩放、拖动、双指缩放、适应窗口与原始大小。Esc 或关闭按钮只关闭大图，保留修图窗口；参考图旁的图片加号用于更换图片。预览不会上传图片或调用 AI。
+
 在项目根目录创建 `.env`，格式参照 [.env.example](.env.example)。本地 `.env` 已被 Git 忽略，静态服务也不会提供下载；不要把密钥发到聊天或提交到仓库。
 
 | 配置项 | 内容 |
@@ -116,46 +129,69 @@ AZURE_OPENAI_VISION_API_VERSION=2024-10-21
 
 ## 代码结构与扩展
 
-项目仍使用原生 ES 模块，没有新增框架或构建依赖。入口 [src/main.js](src/main.js) 负责装配模块、绑定摄影参数，并协调项目恢复与撤销；其余职责按功能分离：
+React 入口为 [src/main.tsx](src/main.tsx)，[src/App.tsx](src/App.tsx) 负责主题、认证与启动错误。工作区由 [src/layout/StudioLayout.tsx](src/layout/StudioLayout.tsx) 装配：项目顶栏、七类工具导航、可折叠参数区、主视口和底部拍摄栏。手机端将视口和拍摄入口放在上方，横向工具导航与独立滚动参数区置于下方。
+
+顶栏、视口、拍摄栏分别位于 [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)。场景与摄影参数分别由 [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx) 管理；切换工具只改变可见性，不卸载控件或重建场景。[src/StudioMarkup.tsx](src/StudioMarkup.tsx) 保留素材窗口容器与兼容导出。[src/components/StudioControls.tsx](src/components/StudioControls.tsx) 提供 Ant Design 按钮、滑块与控制器同步。布局样式集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
+
+本次为渐进式前端迁移：React 界面、认证与存储客户端、场景协议、姿势库和组合预设数据层使用严格 TypeScript。组合预设面板、姿势分类搜索与展开窗口、保存及另存窗口已由 React 状态和 Ant Design 控件管理；展开与收起共享筛选和选中状态，保存失败保留输入，姿势选择与保存显式触发配置持久化。
+
+`src` 下的自有应用源码已全部迁为 TypeScript / TSX，已移除 `allowJs`，统一通过严格类型检查；第三方 Three.js、VRM、Lucide 及 vendored JS 未改写。React 入口仍为 [src/main.tsx](src/main.tsx)，原生场景控制器已独立命名为 [src/studio-controller.ts](src/studio-controller.ts)，负责渲染装配、项目恢复和撤销。
+
+道具参数、相册列表、修图和大图预览现由 React 渲染状态快照，通过 `useSyncExternalStore` 连接领域控制器，不再动态拼接 HTML 或逐项改写界面。按钮使用 Ant Design，文件选择、原生模态层和 Three.js 交互保留浏览器/渲染器 API；相机与灯光继续使用已有控件桥接，未把 Three.js 对象放入 React 状态。版本 1 项目与姿势数据继续兼容；测试和独立实验脚本保留 JavaScript。开发服务器只对前端源码及资源热更新，数据库与运行产物写入不会刷新页面。
+
+`createStudioController(signal)` 显式创建场景，React 卸载或初始化失败时取消旧实例：停止渲染、媒体轨道与计时器，移除监听器和 ResizeObserver，释放模型、材质、纹理、gizmo、缩略图 URL 与 React 子视图。异步加载在返回后检查实例是否仍有效；认证轮询和 fetch 包装也随实例清理。修图提交固定输入快照，重开窗口不会让旧请求覆盖新原图；中止浏览器请求不保证 Azure 停止处理或计费。
 
 | 模块 | 职责与扩展入口 |
 | --- | --- |
-| [src/studio-scene.js](src/studio-scene.js) | 无影墙、背景平面、位置标记和灯具工厂；灯光定义集中在 `LIGHT_DEFINITIONS` |
-| [src/capture.js](src/capture.js) | 拍照、录制及清理；通过 `takePhoto`、`toggleRecording`、`isRecording` 接入，新增输出流程在此扩展 |
-| [src/pose-schema.js](src/pose-schema.js) | 标准关节和姿势协议，不依赖渲染或界面 |
-| [src/project-schema.js](src/project-schema.js) | 项目校验与默认状态；新增保存字段时同时更新这里及入口的捕获/恢复逻辑 |
-| [src/shot-presets.js](src/shot-presets.js) | AI 预设校验、分类与项目配置转换，无内置测试组合 |
-| [src/shot-browser.js](src/shot-browser.js) | 单人图片上传、AI 分析、显式预览保存与分类库 |
+| [src/studio-scene.ts](src/studio-scene.ts) | 无影墙、背景平面、位置标记和灯具工厂；灯光定义集中在 `LIGHT_DEFINITIONS` |
+| [src/capture.ts](src/capture.ts) | 拍照、录制及清理；通过 `takePhoto`、`toggleRecording`、`isRecording` 接入，新增输出流程在此扩展 |
+| [src/scene-types.ts](src/scene-types.ts) | 姿势、道具、灯光、场景项目和组合预设的共享类型 |
+| [src/pose-schema.ts](src/pose-schema.ts) | 标准关节和姿势协议，不依赖渲染或界面 |
+| [src/project-schema.ts](src/project-schema.ts) | 项目校验与默认状态；新增保存字段时同时更新这里及入口的捕获/恢复逻辑 |
+| [src/shot-presets.ts](src/shot-presets.ts) | 预设校验、分类、20 组手工组合与项目配置转换 |
+| [src/shot-model.ts](src/shot-model.ts) | 图片校验、授权分析、草稿和分类库存储、异步请求与失败恢复 |
+| [src/shot-browser.tsx](src/shot-browser.tsx) | React 组合列表、上传授权、草稿编辑与显式预览保存 |
 | [scene_schema.py](scene_schema.py) | 服务端 AI 场景与预设库的参数校验 |
-| [src/prop-schema.js](src/prop-schema.js) | 道具类型、默认尺寸与项目数据校验 |
-| [src/props.js](src/props.js) | 道具几何体、选择与数值编辑、复制删除、快照和资源释放 |
-| [src/pose-library.js](src/pose-library.js) | 数据文件加载与校验，新增姿势只改 JSON |
-| [src/pose-browser.js](src/pose-browser.js) | 分类、搜索、弹窗和选中态，通过回调通知应用，不直接操纵角色 |
-| [src/pose-store.js](src/pose-store.js) | 本地姿势覆盖与新增、持久化校验、写入失败及多页面冲突保护 |
-| [src/pose-save.js](src/pose-save.js) | 保存按钮与另存窗口，采集名称和分类，通过回调提交姿势 |
-| [src/character.js](src/character.js) | 人偶生命周期与骨骼编辑；IK 和白模适配继续由各自模块负责 |
-| [src/retouch.js](src/retouch.js) | AI 修图界面与请求，摄影控制器通过回调提供原图 |
-| [src/library-client.js](src/library-client.js) | 本地数据接口、令牌、图片读取与配置写入队列 |
-| [src/library.js](src/library.js) | 相册与素材分类、预览、下载、复用、删除及保存失败重试 |
+| [src/prop-schema.ts](src/prop-schema.ts) | 道具类型、默认尺寸与项目数据校验 |
+| [src/props.tsx](src/props.tsx) | 道具几何体、React 选择与数值编辑、复制删除、快照和资源释放 |
+| [src/pose-library.ts](src/pose-library.ts) | 数据文件加载与校验，新增姿势只改 JSON |
+| [src/pose-browser.tsx](src/pose-browser.tsx) | React 分类、搜索、弹窗和选中态，通过回调通知应用，不直接操纵角色 |
+| [src/pose-store.ts](src/pose-store.ts) | 本地姿势覆盖与新增、持久化校验、写入失败及多页面冲突保护 |
+| [src/pose-save.tsx](src/pose-save.tsx) | React 保存按钮与另存窗口，采集名称和分类，通过回调提交姿势 |
+| [src/character.ts](src/character.ts) | 人偶生命周期、材质与骨骼编辑 |
+| [src/pose-ik.ts](src/pose-ik.ts) | 四肢 CCD 求解、距离与关节限制、端点朝向保持 |
+| [src/mannequin.ts](src/mannequin.ts) | 自有白模骨骼映射与 VRMHumanoid 适配，非第三方库源码 |
+| [src/retouch.tsx](src/retouch.tsx) | React 修图表单、上传授权与请求快照，摄影控制器通过回调提供原图 |
+| [src/library-client.ts](src/library-client.ts) | 类型化本地数据接口、令牌、图片读取与配置写入队列 |
+| [src/auth-client.ts](src/auth-client.ts) | 会话身份、过期跳转和跨账号请求保护 |
+| [src/library.tsx](src/library.tsx) | React 相册与素材分类、预览、下载、复用、删除及保存失败重试 |
+| [src/image-preview.tsx](src/image-preview.tsx) | React 大图预览、缩放、触摸手势与焦点恢复 |
+| [src/react-view.tsx](src/react-view.tsx) | 状态快照订阅、统一 Ant Design 主题和可释放的 React 子视图 |
+| [src/lifetime.ts](src/lifetime.ts) | 实例取消信号、资源清理、动画帧、计时器和临时 URL |
+| [src/dom.ts](src/dom.ts) | 类型化必需节点查询；节点缺失时明确报错 |
 | [storage.py](storage.py) | SQLite 图片、缩略图和配置事务；不包含 Azure 调用 |
 
-依赖方向保持为“入口装配 → 功能模块 → 数据协议”，模块不要反向导入入口，也不要传入可任意修改的全局应用对象。控制器每个页面创建一次，各自持有内部状态；需要其他模块完成的工作通过明确回调连接。项目和独立姿势仍使用版本 1，已有 ID 和兼容导出保持不变。加入不兼容字段前应先设计迁移策略。
+依赖方向保持为“入口装配 → 功能模块 → 数据协议”，模块不要反向导入入口，也不要传入可任意修改的全局应用对象。控制器随 App 挂载创建、卸载释放，各自持有内部状态；需要其他模块完成的工作通过明确回调连接。项目和独立姿势仍使用版本 1，已有 ID 和兼容导出保持不变。加入不兼容字段前应先设计迁移策略。
 
 ### 前端回归测试
 
-测试只使用原生浏览器与现有 Python 依赖。启动专用测试服务：
+安装测试浏览器后运行：
 
 ```powershell
-.\.venv\Scripts\python.exe tests/serve_frontend.py --port 4176 --no-browser
+npx playwright install chromium
+npm run build
+npm test
 ```
 
-在独立浏览器标签打开终端输出的地址，等待人偶加载，在浏览器开发者工具 Console 执行：
+Playwright 自动启动 4190 端口临时数据库后端与 5190 端口 Vite，端口必须空闲。18 项桌面/手机用例覆盖滑块双向同步、统一工具导航与键盘操作、参数区折叠、四种画幅与六种窗口尺寸、组合草稿授权与分类保存、姿势弹窗、项目导入导出、拍摄入库、素材导入、修图授权和旧结果隔离、画布像素与运镜，以及正常卸载/初始化取消后的重挂载。默认不截图，trace 也不采集截图；失败追踪保存在 Git 忽略的 `test-results/`。仅在需要时设置 `STUDIO_SCREENSHOTS=1` 启用用例末尾的截图。
+
+43 项模块回归由 Playwright 一并执行；也可以在 Vite 页面控制台运行：
 
 ```js
 await (await import('/tests/frontend.test.js')).runTests()
 ```
 
-成功返回 `passed: 36`；任何断言失败都会抛错。覆盖 AI 预设协议、上传授权、显式预览、分类保存恢复、失败保留、多人数响应拒绝、道具变换控件与尺寸边界，以及原有姿势库、相册、项目、拍摄和录制清理。模拟失败会输出带 `Expected` 的错误日志，这是测试输入，不代表测试失败。测试使用独立 DOM、模拟存储与录制器，不调用 Azure，不下载测试照片或视频。专用服务使用独立临时数据库，关闭服务时清理，不用于保存正式作品；默认仅额外开放这一个测试脚本。正常 `server.py` 仍拒绝访问测试目录，`.env` 和数据库的静态下载保护不变。后端完整回归当前为 24 项，同样不访问 Azure。
+成功返回 `passed: 43`；断言失败会抛错。覆盖 AI 预设协议、上传授权、显式预览、分类保存恢复、失败保留、多人数响应拒绝、道具变换与尺寸边界、姿势库、相册、项目、拍摄、录制中销毁与清理、图片预览，以及 IK 端点位置、朝向保持与资源释放。模拟失败可能输出 `Expected` 日志。测试不会调用 Azure，专用后端不用于保存正式作品。正常 Python 服务仍拒绝访问测试目录，`.env` 和数据库保护不变。后端测试运行 `.\.venv\Scripts\python.exe -m unittest discover -s tests -v`。
 
 模块测试之外，修改拍摄、相机或人偶时仍应检查真实 PNG/WebM、项目保存恢复和桌面/手机端画面，不能用模拟断言替代渲染验收。
 
@@ -226,7 +262,7 @@ await (await import('/tests/frontend.test.js')).runTests()
 
 原有预设继续保留当前朝向和高度；Quaternius 预设带有自己的朝向与贴地/浮空状态。游泳和腾空使用浮空状态，倒地与翻滚按三个 Quaternius 模型的全身最低点计算保守高度。其他体型或进一步修改关节后可能需要微调高度与肢体接触。坐姿、驾驶、持械等仅包含人物姿势，不包含椅子、车辆或武器。这些是可编辑的静态姿势，不是动画播放或瑜伽教学。
 
-姿势库包含瑜伽、芭蕾舞、服装拍摄、服装杂志、舞台表演和 Quaternius 分类。侧栏提供文件夹选择、当前文件夹搜索和独立滚动的紧凑列表；选择“全部姿势”可跨分类搜索。标题右侧的展开按钮打开大尺寸浏览窗口，选中姿势后自动收起，Esc 或关闭按钮也可返回。浏览条件在展开和收起之间保留，不改变人物姿势；当前姿势名称显示在列表下方。分类是预设的逻辑文件夹，导入 JSON 仍用于应用单个姿势，不会自动存入姿势库。
+姿势库包含瑜伽、芭蕾舞、服装拍摄、服装杂志、舞台表演和 Quaternius 分类。侧栏提供文件夹选择和带搜索的姿势下拉框；选择“全部姿势”可跨分类搜索。选中姿势即应用，键盘方向键和 Enter 也可选择。标题右侧的展开按钮仍打开大尺寸浏览窗口，选中姿势后自动收起，Esc 或关闭按钮也可返回。搜索条件与选中状态在下拉框和展开窗口之间共享；仅浏览或搜索不会改变人物姿势。分类是预设的逻辑文件夹，导入 JSON 仍用于应用单个姿势，不会自动存入姿势库。组合面板同样使用带搜索的预设下拉框，但选择只更新预览，仍需显式点击应用。
 
 ![展开的姿势库：左侧按瑜伽、芭蕾舞、服装杂志和舞台表演分类，右侧搜索并浏览 18 个预设](assets/screenshots/pose-library.png)
 
