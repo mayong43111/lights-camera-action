@@ -18,7 +18,8 @@ const tools = [
 ] as const;
 
 export function StudioLayout() {
-  const { state, actions } = useStudio(state => ({ activeTool: state.activeTool, aspect: state.stage.aspect }));
+  const { state, actions } = useStudio(state => ({ activeTool: state.activeTool, aspect: state.stage.aspect,
+    creating: state.character.creation?.kind === 'human' }));
   const active = state.activeTool;
   const [collapsed, setCollapsed] = useState(false);
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 700px)').matches);
@@ -35,7 +36,7 @@ export function StudioLayout() {
   }, [active]);
   function select(key: ToolKey) { actions.selectTool(key); setCollapsed(false); }
   const label = tools.find(tool => tool.key === active)!.label;
-  return <main className={`workspace studio-workspace${collapsed ? ' is-panel-collapsed' : ''}`} style={{ '--frame-aspect': state.aspect } as CSSProperties}>
+  return <main className={`workspace studio-workspace${collapsed ? ' is-panel-collapsed' : ''}${state.creating ? ' is-creating' : ''}`} style={{ '--frame-aspect': state.aspect } as CSSProperties}>
     <nav className="tool-rail" aria-label="摄影棚工具">
       <div className="tool-navigation" role="tablist" aria-label="工具分类" aria-orientation={compact ? 'horizontal' : 'vertical'}>
         {tools.map(({ key, label, Icon }, index) => <Tooltip key={key} title={label} placement={compact ? 'top' : 'right'}>

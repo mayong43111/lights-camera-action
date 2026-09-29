@@ -3,7 +3,9 @@ import { createStudioRuntime } from './studio-runtime';
 import { calculateFraming, type FramingShot } from './camera-framing';
 import type { PhotographySettings, LightSettings, StudioModel, CharacterSettings, StudioOperation, ImportKind } from './studio-model';
 import type { ViewHost } from './react-view';
-import { Character, CHARACTERS } from './character';
+import { Character, CHARACTERS, validateVrmBytes } from './character';
+import { createAppearanceEditor, type CharacterAppearance } from './character-appearance';
+import { parsePartCatalog } from './character-parts';
 import { JOINTS, validPose } from './pose-schema';
 import { createDefaultState, normalizeProjectState, validProject } from './project-schema';
 import { createProjectSession } from './project-session';
@@ -58,7 +60,7 @@ try {
 
     const runtime = createStudioRuntime({
       viewport, pixelRatio: Math.min(window.devicePixelRatio, 2),
-      update: delta => star.update(delta),
+      update: delta => { star.update(delta); appearanceEditor?.update(); },
       canResize: () => !capture.isRecording,
       onResize: (width, height) => model.setResolution(`${width} × ${height}`),
     });
@@ -85,6 +87,10 @@ try {
     let backgroundLoadVersion = 0;
     let poseCustomized = false;
     let modelLoading = false;
+    let appearanceEditor: ReturnType<typeof createAppearanceEditor> | null = null;
+    let previousAppearance: CharacterAppearance | null = null;
+    let previousCharacterState: ProjectState | null = null;
+    let creationCamera: { position: THREE.Vector3; target: THREE.Vector3; autoOrbit: boolean } | null = null;
     lifetime.defer(() => { backgroundLoadVersion++; });
     const project = createProjectSession({
       capture: captureState,
@@ -169,6 +175,15 @@ try {
     lifetime.defer(model.connect({
       run: runOperation,
       importFile,
+      setAppearance: appearance => {
+        const creation = model.getSnapshot().character.creation;
+        if (!creation || creation.saving || !appearanceEditor) return;
+        try {
+          appearanceEditor.apply(appearance);
+          model.setCharacter({ creation: { ...creation, appearance, error: undefined } });
+        } catch (error) { announce(error instanceof Error ? error.message : String(error)); }
+      },
+      finishCharacter,
       setCharacter: changeCharacter,
       setStage: patch => {
         rememberState();
@@ -180,6 +195,7 @@ try {
       beginEdit: rememberState,
       setPhotography: patch => { applyPhotography(patch); scheduleConfiguration(); },
       frame: mode => frameCharacter(mode),
+      previewCharacter,
       selectTool: panel => {
         props.setEditing(panel === 'props');
         if (panel !== 'poses') {
@@ -202,6 +218,9 @@ try {
     model.setAvailability({ loading: false });
     if (poseStore.warning) announce(poseStore.warning);
     try {
+      const custom = await libraryClient.characters();
+      lifetime.signal.throwIfAborted();
+      model.setCharacter({ custom: custom.items });
       const saved = await libraryClient.settings('scene');
       lifetime.signal.throwIfAborted();
       if (saved) {
@@ -219,7 +238,7 @@ try {
     lifetime.defer(() => controls.removeEventListener('end', scheduleConfiguration));
     window.addEventListener('beforeunload', event => {
       const state = project.getSnapshot();
-      if (state.dirty || state.saving || retouch.hasPendingChanges || library.hasPending) {
+      if (state.dirty || state.saving || retouch.hasPendingChanges || library.hasPending || model.getSnapshot().character.creation) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -271,9 +290,83 @@ try {
           case 'reset': await resetStudio(); break;
           case 'photo': takePhoto(); break;
           case 'record': toggleRecording(); break;
+          case 'createHumanFemale':
+          case 'createHumanMale': {
+            if (capture.isRecording) break;
+            const original = captureState();
+            rememberState();
+            if (await switchCharacter(operation === 'createHumanMale' ? 'humanMale' : 'humanFemale', false)) {
+              previousCharacterState = original;
+              await runOperation('createCharacter');
+            }
+            break;
+          }
+          case 'createCharacter': {
+            if (!appearanceEditor || !star.vrm || capture.isRecording) break;
+            previousAppearance = appearanceEditor.capture();
+            creationCamera = { position: camera.position.clone(), target: controls.target.clone(), autoOrbit: controls.autoRotate };
+            modelLoading = true;
+            star.setEditing(false);
+            model.setCharacter({ creation: { saving: false, kind: appearanceEditor.kind, appearance: appearanceEditor.capture(), colors: appearanceEditor.colors, morphs: appearanceEditor.morphs, meshes: appearanceEditor.meshes } });
+            model.setAvailability({ busy: true });
+            lifetime.frame(() => previewCharacter('full', 'front'));
+            poseSaving.update();
+            props.refresh();
+            break;
+          }
+          case 'cancelCharacter': {
+            if (model.getSnapshot().character.creation?.saving) break;
+            const original = previousCharacterState;
+            if (previousAppearance) appearanceEditor?.apply(previousAppearance);
+            endCharacterCreation();
+            if (original && !await restoreState(original)) {
+              announce('已取消制作，原人偶暂时无法恢复');
+              break;
+            }
+            announce('已取消制作，原人偶已还原');
+            break;
+          }
           case 'library': library.open('photo'); break;
           case 'retouch': await retouch.open(); break;
           case 'exportPose': downloadJson(star.capturePose(), 'studio-pose.json'); break;
+          case 'exportCharacterModel': {
+            if (!star.vrm || capture.isRecording) break;
+            modelLoading = true;
+            model.setAvailability({ busy: true });
+            const source = star.vrm.scene;
+            try {
+              const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+              lifetime.signal.throwIfAborted();
+              const bytes = await new GLTFExporter().parseAsync(source, { binary: true, onlyVisible: true, includeCustomExtensions: false });
+              lifetime.signal.throwIfAborted();
+              if (!(bytes instanceof ArrayBuffer)) throw new Error('模型导出格式无效');
+              const url = lifetime.objectUrl(new Blob([bytes], { type: 'model/gltf-binary' }));
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = `${characterDescription(star.id).name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/\.vrm$/i, '')}.glb`;
+              link.click();
+              lifetime.timeout(() => lifetime.releaseUrl(url), 1000);
+              announce('已导出当前人物 GLB');
+            } finally {
+              modelLoading = false;
+              if (!lifetime.signal.aborted) model.setAvailability({ busy: project.getSnapshot().restoring });
+            }
+            break;
+          }
+          case 'exportCharacter': {
+            if (!star.id.startsWith('custom:')) break;
+            const id = star.id.slice(7);
+            if (model.getSnapshot().character.custom.find(asset => asset.id === id)?.base) break;
+            const bytes = await libraryClient.character(id);
+            lifetime.signal.throwIfAborted();
+            const url = lifetime.objectUrl(new Blob([bytes], { type: 'model/gltf-binary' }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = model.getSnapshot().character.custom.find(asset => asset.id === id)?.name ?? 'character.vrm';
+            link.click();
+            lifetime.timeout(() => lifetime.releaseUrl(url), 1000);
+            break;
+          }
           case 'clearBackground': rememberState(); await setBackground(null); break;
           case 'resetJoint': rememberState(); star.setJoint(star.selected, poses[currentPose][star.selected] ?? [0, 0, 0]); onJointChange(star.selected); break;
         }
@@ -281,8 +374,24 @@ try {
     }
 
     async function importFile(kind: ImportKind, file: File) {
-      if (kind === 'project') await loadProject(file);
+      if (kind === 'parts') {
+        const creation = model.getSnapshot().character.creation;
+        if (!creation || creation.saving || !appearanceEditor) return;
+        try {
+          if (file.size > 128 * 1024) throw new Error('部件清单超过 128 KB');
+          const catalog = parsePartCatalog(JSON.parse(await file.text()));
+          if (lifetime.signal.aborted || model.getSnapshot().character.creation !== creation) return;
+          const appearance = { ...creation.appearance, parts: { catalog,
+            selected: Object.fromEntries(catalog.groups.map(group => [group.id, group.required ? group.options[0].id : null])),
+          } };
+          appearanceEditor.apply(appearance);
+          model.setCharacter({ creation: { ...creation, appearance } });
+          announce('部件清单已载入');
+        } catch (error) { announce(`未载入部件：${error instanceof Error ? error.message : String(error)}`); }
+      }
+      else if (kind === 'project') await loadProject(file);
       else if (kind === 'pose') await importPose(file);
+      else if (kind === 'character') await importCharacter(file);
       else await importBackground(file);
     }
 
@@ -315,6 +424,23 @@ try {
       const names: Record<string, string> = { full: '全身取景', half: '半身取景', face: '面部特写', low: '低机位仰拍', scene: '人物与全部道具取景' };
       scheduleConfiguration();
       announce(`已切换为${names[mode] ?? mode}`);
+    }
+
+    function previewCharacter(area: 'full' | 'face', direction: 'front' | 'left' | 'right' | 'back') {
+      if (!model.getSnapshot().character.creation) return;
+      const bounds = star.getFramingBounds(area);
+      if (!bounds) return;
+      const offset = { front: 0, left: -Math.PI / 2, right: Math.PI / 2, back: Math.PI }[direction];
+      const angle = star.group.rotation.y + offset;
+      controls.autoRotate = false;
+      controls.enableDamping = false;
+      controls.update();
+      const frame = calculateFraming({ bounds, camera, target: controls.target, minDistance: controls.minDistance, lowAngle: false,
+        shot: { direction: [Math.sin(angle), 0, Math.cos(angle)] } });
+      controls.target.copy(frame.target);
+      camera.position.copy(frame.position);
+      controls.update();
+      controls.enableDamping = true;
     }
 
     function applyPhotography(patch: Partial<PhotographySettings>) {
@@ -548,9 +674,88 @@ try {
       if (edited) scheduleConfiguration();
     }
 
-    async function switchCharacter(id: string, recordHistory = true) {
-      if (lifetime.signal.aborted || modelLoading || !Object.hasOwn(CHARACTERS, id)) return false;
-      if (!['mannequin', 'mannequinFemale', 'quaternius'].includes(id)) id = 'mannequinFemale';
+    function characterDescription(id: string) {
+      const custom = model.getSnapshot().character.custom.find(asset => `custom:${asset.id}` === id);
+      return custom ? { name: custom.name, credit: `${custom.name} · ${custom.base ? '定制人偶' : '自定义 VRM'}` } : CHARACTERS[id] ?? { name: '自定义人偶', credit: '自定义 VRM' };
+    }
+
+    function endCharacterCreation() {
+      if (creationCamera) {
+        controls.enableDamping = false;
+        controls.target.copy(creationCamera.target);
+        camera.position.copy(creationCamera.position);
+        controls.autoRotate = creationCamera.autoOrbit;
+        controls.update();
+        controls.enableDamping = true;
+        creationCamera = null;
+      }
+      previousAppearance = null;
+      previousCharacterState = null;
+      modelLoading = false;
+      model.setCharacter({ creation: null });
+      model.setAvailability({ busy: project.getSnapshot().restoring });
+      syncJointControls();
+      poseSaving.update();
+      props.refresh();
+    }
+
+    async function finishCharacter(name: string) {
+      const creation = model.getSnapshot().character.creation;
+      if (!creation || creation.saving || !appearanceEditor || !name.trim()) return;
+      model.setCharacter({ creation: { ...creation, saving: true, error: undefined } });
+      try {
+        const current = model.getSnapshot().character.custom.find(asset => `custom:${asset.id}` === star.id);
+        const asset = await libraryClient.createCharacter(name.trim(), current?.base ?? star.id, appearanceEditor.capture());
+        lifetime.signal.throwIfAborted();
+        modelLoading = false;
+        if (!previousCharacterState) rememberState();
+        star.id = `custom:${asset.id}`;
+        model.setCharacter({ custom: [asset, ...model.getSnapshot().character.custom] });
+        model.setCharacter({ credit: characterDescription(star.id).credit });
+        endCharacterCreation();
+        scheduleConfiguration();
+        announce(`“${asset.name}”已加入人偶选择`);
+      } catch (error) {
+        if (!lifetime.signal.aborted) model.setCharacter({ creation: { ...creation, saving: false, error: `未保存：${error instanceof Error ? error.message : String(error)}` } });
+        announce(`未保存：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    async function importCharacter(file: File) {
+      let uploaded: string | undefined;
+      modelLoading = true;
+      model.setAvailability({ busy: true });
+      announce('正在导入自定义人偶…');
+      try {
+        if (!/\.vrm$/i.test(file.name) || file.size > 40 * 1024 * 1024) throw new Error('请选择小于 40 MB 的 VRM 文件');
+        const bytes = await file.arrayBuffer();
+        validateVrmBytes(bytes);
+        lifetime.signal.throwIfAborted();
+        const asset = await libraryClient.addCharacter(file);
+        uploaded = asset.id;
+        lifetime.signal.throwIfAborted();
+        model.setCharacter({ custom: [asset, ...model.getSnapshot().character.custom] });
+        modelLoading = false;
+        if (!await switchCharacter(`custom:${asset.id}`, true, bytes)) throw new Error('模型解析失败或缺少必要的人形骨骼');
+        uploaded = undefined;
+      } catch (error) {
+        announce(`未导入：${error instanceof Error ? error.message : String(error)}，当前人偶已保留`);
+      } finally {
+        if (uploaded) {
+          model.setCharacter({ custom: model.getSnapshot().character.custom.filter(asset => asset.id !== uploaded) });
+          try { await libraryClient.removeCharacter(uploaded); }
+          catch { announce('无效人偶未加载，但上传资源清理失败'); }
+        }
+        modelLoading = false;
+        if (!lifetime.signal.aborted) model.setAvailability({ busy: project.getSnapshot().restoring });
+      }
+    }
+
+    async function switchCharacter(id: string, recordHistory = true, bytes?: ArrayBuffer) {
+      if (lifetime.signal.aborted || modelLoading) return false;
+      const custom = /^custom:[a-f0-9]{32}$/.test(id);
+      if (!custom && !Object.hasOwn(CHARACTERS, id)) return false;
+      if (!custom && !['mannequin', 'mannequinFemale', 'quaternius', 'humanFemale', 'humanMale'].includes(id)) id = 'mannequinFemale';
       if (star.vrm && star.id === id) return true;
       if (recordHistory) rememberState();
       modelLoading = true;
@@ -559,15 +764,23 @@ try {
       poseSaving.update();
       props.refresh();
       try {
-        await star.load(id);
+        const asset = model.getSnapshot().character.custom.find(asset => `custom:${asset.id}` === id);
+        const source = asset?.base ?? id;
+        if (custom && !bytes && source.startsWith('custom:')) bytes = await libraryClient.character(source.slice(7));
+        lifetime.signal.throwIfAborted();
+        if (!await star.load(source, bytes)) return false;
         if (lifetime.signal.aborted) return false;
-        model.setCharacter({ credit: CHARACTERS[id].credit });
+        star.id = id;
+        appearanceEditor = createAppearanceEditor(star.vrm!.scene);
+        if (asset?.appearance) appearanceEditor.apply(asset.appearance);
+        const description = characterDescription(id);
+        model.setCharacter({ credit: description.credit });
         syncJointControls();
-        announce(`${CHARACTERS[id].name} · ${Object.keys(star.joints).length} 个可编辑关节`);
+        announce(`${description.name} · ${Object.keys(star.joints).length} 个可编辑关节`);
         return true;
       } catch (error) {
         if (lifetime.signal.aborted) return false;
-        model.setCharacter({ credit: star.vrm ? CHARACTERS[star.id].credit : '人偶加载失败' });
+        model.setCharacter({ credit: star.vrm ? characterDescription(star.id).credit : '人偶加载失败' });
         announce(`人偶加载失败：${error instanceof Error ? error.message : String(error)}`);
         return false;
       } finally {

@@ -1,5 +1,24 @@
 # Bundled character models
 
+## In-studio customizable humans
+
+- `human/female.glb` and `human/male.glb` are generated from official MakeHuman Community **CC0 data only**. No MakeHuman/MPFB/Blender application code is bundled or required.
+- Base mesh, rig, weights and shape target data: https://github.com/makehumancommunity/makehuman at `a8bc2d54ff0ac92e78ff71431b1023eda42bf482`. The source asset license is retained in `human/LICENSE.md`; the rig and weights also explicitly state CC0. The creator uses 44 linked morphs: the original eight plus 36 appended targets supporting 20 bidirectional body/face controls defined in `src/creator-shapes.json`. Original morph indices are preserved for saved recipes.
+- Hair, two outfits per body, shoes, eyes and eyebrows: https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html. The official pack lists these assets as CC0; extracted asset headers retain the September 2020 CC0 release notice and original attribution.
+- `human/source.json` records source revision, individual source hashes and the official system archive hash. The full 268 MB archive is not bundled. The selected original data is retained for reproducible conversion.
+- Conversion uses Three.js OBJLoader, BufferGeometry utilities and GLTFExporter. It retains source skin weights, recomputes body-specific bone anchors, fits wearable proxy mappings to the same body/shape targets, removes covered body triangles per outfit, and embeds the default selectable parts. Textures are local companion files loaded before switching characters.
+- The default base is the official adult Asian female/male target. This is a limited starting collection, not arbitrary anatomy generation or automatic fitting of third-party clothes. Face controls are actual authored shape targets, not expressions or overall mesh scaling. Color controls tint existing textures.
+- CharacterStudio's default Anata female body was not adopted: its embedded VRM metadata says `OnlyAuthor`, `commercialUssageName: Disallow`, and `Redistribution_Prohibited`. Its application's code license does not authorize model redistribution.
+
+To reproduce, download the linked official CC0 system ZIP, then run from the repository root (the preparation script uses the requested local HTTP proxy without disabling TLS):
+
+```powershell
+node scripts/prepare-character.mjs "C:\path\makehuman_system_assets_cc0.zip"
+node scripts/build-character.mjs
+```
+
+The generated model is loaded by the existing three-vrm normalized humanoid adapter. Saving creates an ordinary character recipe; GLB export includes the selected skinned meshes, current morph weights and textures, not VRM extensions or animation clips.
+
 ## VRM specification samples
 
 These original, unmodified VRM files and preview images come from the official VRM specification sample collection:

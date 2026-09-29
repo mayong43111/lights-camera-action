@@ -158,6 +158,35 @@ def saved_settings(name):
     return jsonify(local_store().save_settings(name, payload.get('value'), payload.get('revision')))
 
 
+@app.route('/api/data/characters', methods=['GET', 'POST'])
+def characters():
+    if request.method == 'GET':
+        return jsonify(items=local_store().list_characters())
+    if request.mimetype != 'model/gltf-binary':
+        raise EditError('invalid_request')
+    return jsonify(local_store().add_character(request.args.get('name'), request.get_data())), 201
+
+
+@app.get('/api/data/characters/<identifier>')
+def get_character(identifier):
+    content, name = local_store().get_character(identifier)
+    return send_file(io.BytesIO(content), mimetype='model/gltf-binary', download_name=name, as_attachment=True)
+
+
+@app.post('/api/data/characters/variants')
+def create_character():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        raise EditError('invalid_request')
+    return jsonify(local_store().create_character(payload.get('name'), payload.get('base'), payload.get('appearance'))), 201
+
+
+@app.post('/api/data/characters/<identifier>/delete')
+def delete_character(identifier):
+    local_store().delete_character(identifier)
+    return jsonify(deleted=True)
+
+
 @app.get('/')
 @app.get('/<path:relative>')
 def static_asset(relative='index.html'):

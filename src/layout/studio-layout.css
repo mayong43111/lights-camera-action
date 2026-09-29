@@ -64,6 +64,80 @@
 .capture-actions .button-record { color: #a33d33; background: #fff; border-color: #d8bab4; }
 .capture-actions .button-record.is-recording { color: #fff; background: var(--signal); }
 .startup-error { top: 72px; }
+.creator-entry { padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.studio-inspector .creator-editor { padding: 0; }
+.creator-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 16px 16px 10px; }
+.creator-heading h2 { margin: 0; font-size: 16px; }
+.creator-heading > span { font-size: 11px; color: #607078; }
+.creator-name { padding: 0 16px 14px; }
+.creator-tabs > .ant-tabs-nav { position: sticky; top: 0; z-index: 2; margin: 0; background: #fff; }
+.creator-tabs .ant-tabs-nav-list { width: 100%; }
+.creator-tabs .ant-tabs-tab { flex: 1; justify-content: center; padding: 12px 6px; }
+.creator-tabs .ant-tabs-tab-icon { margin-inline-end: 6px; display: inline-flex; vertical-align: middle; }
+.creator-fields { display: grid; gap: 18px; padding: 18px 16px; }
+.creator-group-title { font-size: 11px; font-weight: 600; color: #607078; }
+.creator-range { min-width: 0; }
+.creator-range-heading { display: flex; align-items: center; gap: 4px; min-height: 28px; }
+.creator-range-heading > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.creator-range-heading input { width: 51px; min-width: 0; height: 28px; padding: 3px; border: 1px solid var(--line); border-radius: 3px; text-align: right; background: #f8fafb; }
+.creator-unit { font-size: 10px; color: #607078; }
+.creator-editor .creator-reset { width: 25px; height: 26px; min-width: 25px; padding: 0; flex-shrink: 0; }
+.creator-range .ant-slider { margin: 12px 6px 4px; }
+.creator-color { min-width: 0; margin: 0; padding: 0; border: 0; }
+.creator-color legend { margin-bottom: 9px; padding: 0; font-size: 12px; }
+.creator-swatches { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.creator-swatches > button:not(.creator-reset), .creator-swatches input { box-sizing: border-box; width: 23px; height: 23px; flex: 0 0 23px; padding: 0; border: 1px solid #bcc8cd; border-radius: 50%; cursor: pointer; }
+.creator-swatches > button[aria-pressed="true"] { outline: 2px solid #28786f; outline-offset: 2px; }
+.creator-swatches input { border-radius: 3px; overflow: hidden; }
+.creator-swatches input::-webkit-color-swatch-wrapper { padding: 2px; }
+.creator-advanced { margin: 6px 16px 16px; padding-top: 12px; border-top: 1px solid var(--line); color: #607078; font-size: 11px; }
+.creator-advanced summary { cursor: pointer; padding-bottom: 10px; }
+.creator-advanced ul { max-height: 140px; overflow-y: auto; padding-left: 18px; }
+.creator-footer { position: sticky; bottom: 0; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 12px 16px; background: #fff; border-top: 1px solid var(--line); }
+.creator-footer .button { min-width: 0; padding-inline: 10px; }
+.studio-workspace.is-creating { grid-template-columns: 0 360px minmax(0, 1fr); }
+.is-creating .tool-rail, .is-creating .inspector-heading, .is-creating .capture-bar { display: none; }
+.is-creating .stage-column { grid-template-rows: minmax(0, 1fr) 32px; }
+.is-creating #panel-cast { min-height: 100%; }
+.workshop { min-height: 100%; display: flex; flex-direction: column; background: #fff; }
+.workshop-heading { display: flex; align-items: center; justify-content: space-between; padding: 20px 20px 16px; border-top: 3px solid #28786f; }
+.workshop-heading span { font: 10px Consolas, monospace; color: #6c7d80; }
+.workshop-heading h2 { font-size: 19px; margin: 6px 0 0; }
+.workshop-navigation { position: sticky; top: 0; z-index: 4; background: #fff; border-block: 1px solid var(--line); }
+.workshop-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.workshop-steps button { border: 0; border-bottom: 2px solid transparent; background: #f4f7f8; height: 48px; padding: 4px; font-size: 12px; cursor: pointer; }
+.workshop-steps button span { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 5px; border: 1px solid #c4cdcf; border-radius: 50%; font-size: 10px; }
+.workshop-steps button[aria-selected="true"] { color: #175e52; border-bottom-color: #28786f; background: #fff; }
+.workshop-steps button[aria-selected="true"] span { background: #28786f; color: #fff; border-color: #28786f; }
+.workshop-tools { display: flex; justify-content: center; align-items: center; gap: 5px; min-height: 42px; padding: 4px 8px; }
+.workshop-tools .ant-btn { width: 29px; padding: 0; }
+.workshop-content { flex: 1; padding: 16px 20px 24px; }
+.workshop-section-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+.workshop-section-heading h3, .workshop-fields h3 { margin: 0; font-size: 14px; }
+.workshop-section-heading .ant-btn { width: 30px; padding: 0; }
+.workshop-fields { display: grid; gap: 18px; }
+.workshop-fields[hidden] { display: none; }
+.workshop-fields .select-label { margin: 0 0 -10px; }
+.workshop-part .select-label { margin-bottom: 8px; }
+.workshop-part .ant-select { width: 100%; }
+.workshop-footer { grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; padding: 12px 20px; }
+.workshop-footer > span { text-align: center; font-size: 11px; color: #607078; }
+.workshop-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 8px; font-size: 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+.workshop-summary > div { display: contents; }
+.workshop-summary dt { color: #607078; }
+.workshop-summary dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+@media (min-width: 701px) and (max-width: 1100px) {
+  .studio-workspace.is-creating { grid-template-columns: 0 320px minmax(0, 1fr); }
+}
+@media (max-width: 700px) {
+  .studio-workspace.is-creating { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(140px, 38dvh) minmax(0, 1fr); }
+  .is-creating .studio-inspector { grid-column: 1; grid-row: 2; }
+  .is-creating .stage-column { grid-template-rows: minmax(0, 1fr) 26px; }
+  .workshop-heading { padding: 12px 16px; }
+  .workshop-heading h2 { font-size: 16px; }
+  .workshop-content { padding: 12px 16px 20px; }
+  .workshop-footer { padding: 10px 16px; }
+}
 @media (min-width: 701px) and (max-width: 1100px) {
   .studio-workspace { grid-template-columns: 58px 264px minmax(0, 1fr); }
   .studio-workspace.is-panel-collapsed { grid-template-columns: 58px 0 minmax(0, 1fr); }

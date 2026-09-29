@@ -11,7 +11,9 @@ import { createMannequin } from './mannequin';
 import { JOINTS, validPose } from './pose-schema';
 export { JOINTS, validPose } from './pose-schema';
 
-export const CHARACTERS: Record<string, { name: string; url: string; credit: string; format?: string }> = {
+export const CHARACTERS: Record<string, { name: string; url: string; credit: string; format?: string; creator?: boolean }> = {
+  humanFemale: { name: '女性人体', url: './assets/characters/human/female.glb', format: 'gltf', creator: true, credit: 'MakeHuman Community · CC0 · 女性人体' },
+  humanMale: { name: '男性人体', url: './assets/characters/human/male.glb', format: 'gltf', creator: true, credit: 'MakeHuman Community · CC0 · 男性人体' },
   pixiv: { name: '凛 · 人形模特', url: './assets/characters/pixiv.vrm', credit: 'pixiv Inc. · VRM Public License 1.0' },
   seed: { name: 'Seed · 风格模特', url: './assets/characters/seed.vrm', credit: 'Seed-san by VirtualCast, Inc. · VRM Public License 1.0' },
   mannequin: { name: '男性白模 · 健硕人形', url: './assets/characters/mannequin.glb', format: 'gltf', credit: 'Quaternius · Universal Base Characters · CC0' },
@@ -120,17 +122,37 @@ export class Character {
 
   async load(id: string, bytes?: ArrayBuffer) {
     this.lifetime.signal.throwIfAborted();
+    const definition = Object.hasOwn(CHARACTERS, id) ? CHARACTERS[id] : undefined;
+    if (!definition && !bytes) throw new Error('找不到自定义人偶文件');
     const version = ++this.version;
     if (!bytes) {
-      const response = await fetch(CHARACTERS[id].url, { signal: this.lifetime.signal });
+      const response = await fetch(definition!.url, { signal: this.lifetime.signal });
       if (!response.ok) throw new Error(`模型下载失败 (${response.status})`);
       bytes = await response.arrayBuffer();
     }
-    validateVrmBytes(bytes, CHARACTERS[id].format !== 'gltf');
+    validateVrmBytes(bytes, definition?.format !== 'gltf');
     const gltf = await this.loader.parseAsync(bytes, '');
     let vrm: VRM | null | undefined;
     try {
-      vrm = gltf.userData.vrm ?? (CHARACTERS[id].format === 'gltf' ? createMannequin(gltf.scene) : null);
+      if (definition?.creator) {
+        const materials = new Set<THREE.MeshStandardMaterial>();
+        gltf.scene.traverse(object => {
+          if (object instanceof THREE.Mesh) for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+            if (material instanceof THREE.MeshStandardMaterial && typeof material.userData.creatorTexture === 'string') materials.add(material);
+          }
+        });
+        for (const material of materials) {
+          const path = material.userData.creatorTexture as string;
+          if (!path.startsWith('system/') || path.includes('..') || path.includes(':')) throw new Error('人物贴图路径无效');
+          const texture = await new THREE.TextureLoader().loadAsync(`./assets/characters/human/${path}`);
+          material.map = texture;
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = this.maxAnisotropy;
+          material.needsUpdate = true;
+          this.lifetime.signal.throwIfAborted();
+        }
+      }
+      vrm = gltf.userData.vrm ?? (definition?.format === 'gltf' ? createMannequin(gltf.scene) : null);
     } catch (error) {
       VRMUtils.deepDispose(gltf.scene);
       throw error;

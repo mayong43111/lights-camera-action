@@ -1,14 +1,20 @@
+import type { CharacterAppearance } from './character-appearance';
+
 const errors: Record<string, string> = {
   storage_failed: '本地保存失败，请检查磁盘空间和目录权限。',
   settings_conflict: '配置已被其他窗口更新，请先导出当前配置，再刷新页面。',
   invalid_token: '服务已重启，请刷新页面后重试。',
-  not_found: '图片已被删除，请刷新相册。',
+  not_found: '资源不存在或已被删除。',
+  invalid_character: '请选择小于 40 MB、素材内嵌的独立 VRM 人偶。',
+  invalid_request: '提交的资源名称或参数无效。',
+  character_in_use: '该模型仍被定制人偶使用，不能删除。',
   invalid_image: '图片无效或超出大小限制。',
   request_too_large: '图片或配置超出大小限制。',
 };
 
 export type AssetKind = 'photo' | 'result' | 'person' | 'garment';
 export type SettingsName = 'scene' | 'retouch' | 'shots';
+export interface CharacterAsset { id: string; name: string; created: string; size: number; base?: string; appearance?: CharacterAppearance }
 export interface Asset {
   id: string;
   kind: AssetKind;
@@ -51,13 +57,13 @@ export function createLibraryClient(request: typeof fetch = fetch) {
     return tokenRequest;
   }
 
-  async function call(path: string, body?: unknown): Promise<Response> {
+  async function call(path: string, body?: unknown, binary?: Blob): Promise<Response> {
     let response: Response;
     try {
       response = await request('/api/data/' + path, {
-        method: body === undefined ? 'GET' : 'POST',
-        headers: { 'X-Studio-Token': await token(), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        method: body === undefined && !binary ? 'GET' : 'POST',
+        headers: { 'X-Studio-Token': await token(), ...(binary ? { 'Content-Type': 'model/gltf-binary' } : body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+        ...(binary ? { body: binary } : body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
       throw new Error('无法连接本地存储服务，数据尚未确认保存。');
@@ -83,6 +89,11 @@ export function createLibraryClient(request: typeof fetch = fetch) {
     (await call(`assets/${encodeURIComponent(id)}${thumbnail ? '?thumbnail=1' : ''}`)).blob();
 
   return {
+    characters: () => json<{ items: CharacterAsset[] }>('characters'),
+    createCharacter: (name: string, base: string, appearance: CharacterAppearance) => json<CharacterAsset>('characters/variants', { name, base, appearance }),
+    addCharacter: async (file: File): Promise<CharacterAsset> => (await call(`characters?name=${encodeURIComponent(file.name)}`, undefined, file)).json(),
+    character: async (id: string): Promise<ArrayBuffer> => (await call(`characters/${encodeURIComponent(id)}`)).arrayBuffer(),
+    removeCharacter: (id: string) => json<{ deleted: boolean }>(`characters/${encodeURIComponent(id)}/delete`, {}),
     list: (kind: AssetKind, offset = 0) => json<{ items: Asset[]; total: number }>(`assets?kind=${encodeURIComponent(kind)}&offset=${offset}`),
     add: (kind: AssetKind, image: string, name: string) => json<Asset>('assets', { kind, image, name }),
     remove: (id: string) => json<{ ok: boolean }>(`assets/${encodeURIComponent(id)}/delete`, {}),

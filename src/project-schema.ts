@@ -42,7 +42,7 @@ export function validProject(project: unknown, { poses, characters, lightDefinit
   if (typeof state.pose !== 'string' || !isColor(state.backdrop)) return false;
   if (state.props !== undefined && !validProps(state.props)) return false;
   if (!Object.hasOwn(poses, state.pose) && (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(state.pose) || !validPose(state.jointPose))) return false;
-  if (state.character != null && (typeof state.character !== 'string' || !Object.hasOwn(characters, state.character))) return false;
+  if (state.character != null && (typeof state.character !== 'string' || (!Object.hasOwn(characters, state.character) && !/^custom:[a-f0-9]{32}$/.test(state.character)))) return false;
   if (state.jointPose != null && !validPose(state.jointPose)) return false;
   if (state.poseCustomized != null && typeof state.poseCustomized !== 'boolean') return false;
   if (state.poseSaveTarget != null && state.poseSaveTarget !== state.pose) return false;

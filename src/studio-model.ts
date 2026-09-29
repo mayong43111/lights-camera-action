@@ -1,14 +1,18 @@
 import { LIGHT_DEFINITIONS } from './studio-defaults';
 import type { LightId, Vector3Tuple } from './scene-types';
 import type { CaptureState } from './capture';
+import type { CharacterAsset } from './library-client';
+import type { CharacterAppearance, CharacterCreation } from './character-appearance';
 
 export type ToolKey = 'cast' | 'shots' | 'poses' | 'props' | 'stage' | 'camera' | 'lights';
-export type StudioOperation = 'save' | 'export' | 'undo' | 'reset' | 'photo' | 'record' | 'library' | 'retouch' | 'exportPose' | 'resetJoint' | 'clearBackground';
-export type ImportKind = 'project' | 'pose' | 'background';
+export type StudioOperation = 'save' | 'export' | 'undo' | 'reset' | 'photo' | 'record' | 'library' | 'retouch' | 'exportPose' | 'resetJoint' | 'clearBackground' | 'exportCharacter' | 'exportCharacterModel' | 'createCharacter' | 'cancelCharacter' | 'createHumanFemale' | 'createHumanMale';
+export type ImportKind = 'project' | 'pose' | 'background' | 'character' | 'parts';
 export interface CharacterSettings {
   id: string; credit: string; rotation: number; grounded: boolean; height: number;
   selected: string; angles: Vector3Tuple; selectable: string[]; jointAvailable: boolean;
   editing: boolean; mode: 'fk' | 'ik';
+  custom: CharacterAsset[];
+  creation: CharacterCreation | null;
 }
 export interface LightSettings {
   enabled: boolean;
@@ -50,7 +54,10 @@ interface StudioCommands {
   beginEdit(): void;
   setPhotography(patch: Partial<PhotographySettings>): void;
   frame(mode: string): void;
+  previewCharacter(area: 'full' | 'face', direction: 'front' | 'left' | 'right' | 'back'): void;
   selectTool(tool: ToolKey): void;
+  setAppearance(appearance: CharacterAppearance): void;
+  finishCharacter(name: string): Promise<void>;
 }
 
 export function createStudioModel() {
@@ -58,7 +65,7 @@ export function createStudioModel() {
   let commands: StudioCommands | undefined;
   let snapshot: StudioSnapshot = {
     character: { id: 'mannequinFemale', credit: '正在加载白模', rotation: 0, grounded: true, height: 0,
-      selected: 'root', angles: [0, 0, 0], selectable: [], jointAvailable: false, editing: false, mode: 'fk' },
+      selected: 'root', angles: [0, 0, 0], selectable: [], jointAvailable: false, editing: false, mode: 'fk', custom: [], creation: null },
     stage: { backdrop: '#edf4f6', aspect: 1.5 }, status: '正在初始化摄影棚', persistence: '正在读取配置', resolution: '-- × --', account: null,
     capture: { takeNumber: 1, recording: false, stopping: false, elapsed: 0 },
     activeTool: 'shots', ready: false, loading: true, busy: false, retouchBusy: false,
@@ -76,6 +83,7 @@ export function createStudioModel() {
     listeners.forEach(listener => listener());
   }
   function selectTool(activeTool: ToolKey) {
+    if (snapshot.character.creation && activeTool !== 'cast') return;
     update({ activeTool });
     commands?.selectTool(activeTool);
   }
@@ -105,12 +113,22 @@ export function createStudioModel() {
     },
     actions: {
       run(operation: StudioOperation) {
-        if (snapshot.capture.recording && ['photo', 'undo', 'reset', 'resetJoint'].includes(operation)) return;
-        if (snapshot.busy && !['library', 'retouch'].includes(operation)) return;
+        if (snapshot.capture.recording && ['photo', 'undo', 'reset', 'resetJoint', 'createCharacter', 'createHumanFemale', 'createHumanMale'].includes(operation)) return;
+        if (snapshot.busy && !['library', 'retouch', 'cancelCharacter'].includes(operation)) return;
         void commands?.run(operation);
       },
       importFile(kind: ImportKind, file: File) {
+        if (kind === 'parts') {
+          if (snapshot.character.creation && !snapshot.character.creation.saving) void commands?.importFile(kind, file);
+          return;
+        }
         if (!snapshot.loading && !snapshot.busy && !snapshot.capture.recording) void commands?.importFile(kind, file);
+      },
+      setAppearance(appearance: CharacterAppearance) {
+        if (snapshot.character.creation && !snapshot.character.creation.saving) commands?.setAppearance(appearance);
+      },
+      finishCharacter(name: string) {
+        if (snapshot.character.creation && !snapshot.character.creation.saving) void commands?.finishCharacter(name);
       },
       setCharacter(patch: Partial<CharacterSettings>) {
         if (!snapshot.ready || snapshot.busy) return;
@@ -130,6 +148,9 @@ export function createStudioModel() {
         } });
       },
       frame(mode: string) { if (snapshot.ready && !snapshot.busy) commands?.frame(mode); },
+      previewCharacter(area: 'full' | 'face', direction: 'front' | 'left' | 'right' | 'back') {
+        if (snapshot.character.creation && !snapshot.character.creation.saving) commands?.previewCharacter(area, direction);
+      },
       selectTool,
     },
   };

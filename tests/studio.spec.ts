@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { Matrix4, Quaternion, Vector3 } from 'three';
 import type { StudioProject } from '../src/scene-types';
 
 test.beforeEach(async ({ page }) => {
@@ -17,6 +19,407 @@ test.skip('existing frontend contracts', async ({ page }) => {
     return (await import(path)).runTests();
   });
   expect(result.passed).toBeGreaterThanOrEqual(43);
+});
+
+test('character entry has readable controls and contained cards', async ({ page }) => {
+  await page.locator('#tab-cast').click();
+  const create = page.locator('#human-create');
+  await expect(create).toBeVisible();
+  await expect(create).toBeEnabled();
+  const inspect = async () => page.locator('#panel-cast').evaluate(panel => {
+    const button = panel.querySelector<HTMLButtonElement>('#human-create')!;
+    const style = getComputedStyle(button);
+    const luminance = (color: string) => {
+      const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(value => {
+        const channel = Number(value) / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+    };
+    const foreground = luminance(style.color);
+    const background = luminance(style.backgroundColor);
+    const inspector = panel.closest<HTMLElement>('#studio-inspector')!;
+    const bounds = inspector.getBoundingClientRect();
+    const controls = [button, ...panel.querySelectorAll<HTMLElement>('.character-button, .asset-actions > button')];
+    const cards = [...panel.querySelectorAll<HTMLElement>('.character-button')];
+    return {
+      contrast: (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+      contained: controls.every(control => {
+        const rect = control.getBoundingClientRect();
+        return rect.width > 0 && rect.left >= bounds.left && rect.right <= bounds.right
+          && control.scrollWidth <= control.clientWidth + 1 && control.scrollHeight <= control.clientHeight + 1;
+      }),
+      cardsStacked: cards.length === 3 && cards.every(card => {
+        const image = card.querySelector('img')!;
+        const label = card.querySelector('b')!;
+        return image.complete && image.naturalWidth > 0
+          && label.getBoundingClientRect().top >= image.getBoundingClientRect().bottom;
+      }),
+      overflow: inspector.scrollWidth - inspector.clientWidth,
+    };
+  });
+  for (const hovered of [false, true]) {
+    if (hovered) await create.hover();
+    await expect.poll(async () => (await inspect()).contrast).toBeGreaterThanOrEqual(4.5);
+    const layout = await inspect();
+    expect(layout.contained).toBe(true);
+    expect(layout.cardsStacked).toBe(true);
+    expect(layout.overflow).toBeLessThanOrEqual(1);
+  }
+  const selected = await page.locator('.character-button[aria-pressed="true"]').getAttribute('data-character');
+  await create.click();
+  const dialog = page.getByRole('dialog', { name: '新建人物' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '开始制作' })).toBeEnabled();
+  await dialog.getByRole('button', { name: /^取\s*消$/ }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.locator('.character-button[aria-pressed="true"]')).toHaveAttribute('data-character', selected!);
+});
+
+test('built-in human creator changes real hair clothing and shapes and restores its recipe', async ({ page, request }) => {
+  test.setTimeout(600_000);
+  page.setDefaultTimeout(30_000);
+  const token = (await (await request.get('/api/ai/status')).json()).token;
+  const headers = { 'X-Studio-Token': token };
+  let identifier: string | undefined;
+  const failures: string[] = [];
+  page.on('pageerror', error => failures.push(error.message));
+  const choose = async (id: string, label: string) => {
+    await page.locator('.ant-select').filter({ has: page.locator(`#${id}`) }).locator('.ant-select-selector').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({ hasText: new RegExp(`^${label}$`) }).click();
+  };
+  try {
+    await page.locator('#tab-cast').click();
+    await page.locator('[data-character="mannequinFemale"]').click();
+    await expect(page.locator('[data-character="mannequinFemale"]')).toHaveAttribute('aria-pressed', 'true');
+    const newHuman = page.getByRole('dialog', { name: '新建人物' });
+    await page.locator('#human-create').click();
+    await newHuman.getByRole('button', { name: /^取\s*消$/ }).click();
+    await expect(page.locator('[data-character="mannequinFemale"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#human-create').click();
+    await choose('creator-base', '男性人体');
+    await newHuman.getByRole('button', { name: '开始制作' }).click();
+    await expect(page.locator('#character-creator')).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator('#model-credit')).toContainText('男性人体', { timeout: 40_000 });
+    await page.locator('#character-cancel').click();
+    await expect(page.locator('[data-character="mannequinFemale"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#human-create').click();
+    await choose('creator-base', '女性人体');
+    await newHuman.getByRole('button', { name: '开始制作' }).click();
+    await expect(page.locator('#model-credit')).toContainText('女性人体', { timeout: 40_000 });
+    const creator = page.locator('#character-creator');
+    await expect(creator.getByRole('tab')).toHaveCount(4);
+    await expect(creator).not.toContainText('载入部件清单');
+    await expect(page.locator('.studio-workspace')).toHaveClass(/is-creating/);
+    await creator.getByText('健壮', { exact: true }).click();
+    await expect(creator.getByRole('slider', { name: '肌肉轮廓', exact: true })).toHaveAttribute('aria-valuenow', '0.55');
+    await creator.getByRole('button', { name: '撤销外观调整', exact: true }).click();
+    await expect(creator.getByRole('slider', { name: '肌肉轮廓', exact: true })).toHaveAttribute('aria-valuenow', '0');
+    await creator.getByRole('button', { name: '随机当前步骤' }).click();
+    await creator.getByRole('button', { name: '撤销外观调整', exact: true }).click();
+    await creator.getByRole('spinbutton', { name: '肌肉轮廓数值' }).fill('25');
+    const weight = page.getByRole('slider', { name: '胖瘦', exact: true });
+    await weight.press('ArrowLeft');
+    await expect(weight).toHaveAttribute('aria-valuenow', '-0.01');
+    await creator.getByRole('button', { name: '重置胖瘦', exact: true }).click();
+    await expect(weight).toHaveAttribute('aria-valuenow', '0');
+    await creator.getByRole('spinbutton', { name: '胖瘦数值' }).fill('1');
+    await expect(weight).toHaveAttribute('aria-valuenow', '0.01');
+    const rail = await page.locator('#creation-width .ant-slider-rail').boundingBox();
+    expect(rail?.width).toBeGreaterThan(100);
+    await page.locator('#creator-next').click();
+    await expect(creator.getByRole('tab', { name: '面容' })).toHaveAttribute('aria-selected', 'true');
+    await creator.getByRole('spinbutton', { name: '脸宽数值' }).fill('-20');
+    await expect(creator.getByRole('slider', { name: '脸宽', exact: true })).toHaveAttribute('aria-valuenow', '-0.2');
+    await creator.getByText('方正', { exact: true }).click({ timeout: 15_000 });
+    await expect(creator.getByRole('radio', { name: '方正', exact: true })).toBeChecked();
+    await creator.getByText('圆润', { exact: true }).click({ timeout: 15_000 });
+    await expect(creator.getByRole('radio', { name: '圆润', exact: true })).toBeChecked();
+    const face = page.getByRole('slider', { name: '轮廓强度', exact: true });
+    await expect(face).toHaveAttribute('aria-valuenow', '0.5');
+    await face.press('ArrowRight');
+    await expect(face).toHaveAttribute('aria-valuenow', '0.51');
+    await creator.getByRole('tab', { name: '造型' }).click();
+    await expect(page.locator('#part-hair')).toHaveCount(1);
+    await choose('part-hair', '波波头');
+    await choose('part-outfit', '休闲装');
+    for (const tab of ['体型', '面容', '造型']) {
+      await creator.getByRole('tab', { name: tab }).click();
+      const sizes = await creator.evaluate(element => ({ width: element.clientWidth, scroll: element.scrollWidth }));
+      expect(sizes.scroll).toBeLessThanOrEqual(sizes.width + 1);
+      await expect(page.locator('#creator-next')).toBeInViewport();
+    }
+    await page.locator('#creator-next').click();
+    await page.locator('#character-name').fill('');
+    await expect(page.locator('#character-finish')).toBeDisabled();
+    await page.locator('#character-name').fill('内置人体测试');
+    await page.route('**/api/data/characters/variants', route => route.fulfill({ status: 503, json: { error: '测试保存失败' } }), { times: 1 });
+    await page.locator('#character-finish').click();
+    await expect(creator.getByRole('alert')).toContainText('未保存');
+    await expect(page.locator('#character-name')).toHaveValue('内置人体测试');
+    await expect(page.locator('#character-finish')).toBeEnabled();
+    const created = page.waitForResponse(response => response.url().endsWith('/api/data/characters/variants') && response.request().method() === 'POST');
+    await page.locator('#character-finish').click();
+    const response = await created;
+    expect(response.status()).toBe(201);
+    const asset = await response.json();
+    identifier = asset.id;
+    expect(asset.base).toBe('humanFemale');
+    expect(asset.appearance.parts.selected).toEqual({ outfit: 'outfit02', hair: 'bob01' });
+    await expect(page.locator('#character-creator')).toHaveCount(0);
+    await page.locator('#tab-poses').click();
+    await page.locator('#star-rotation [role="slider"]').press('Home');
+    await expect(page.locator('#rotation-output')).toHaveText('-180°');
+    await page.locator('#joint-select').selectOption('head');
+    await page.locator('#joint-y-value').fill('15');
+    await page.locator('#joint-y-value').press('Tab');
+    await page.locator('#config-save').click();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    const saved = (await (await request.get('/api/data/settings/scene', { headers })).json()).value;
+    expect(saved.state.rotation).toBe(-180);
+    expect(saved.state.character).toBe(`custom:${identifier}`);
+    expect(saved.state.jointPose.joints.head[1]).toBeCloseTo(Math.PI / 12);
+    await page.reload();
+    await expect(page.locator('#loading-state')).toHaveClass(/is-hidden/);
+    await page.locator('#tab-cast').click();
+    await expect(page.locator('#config-save')).toBeEnabled({ timeout: 90_000 });
+    await expect(page.locator('#model-credit')).toContainText('内置人体测试');
+    await page.locator('#character-create').click();
+    await expect(weight).toHaveAttribute('aria-valuenow', '0.01');
+    await creator.getByRole('tab', { name: '面容' }).click();
+    await expect(face).toHaveAttribute('aria-valuenow', '0.51');
+    await creator.getByRole('tab', { name: '造型' }).click();
+    await expect(page.locator('.ant-select').filter({ has: page.locator('#part-hair') })).toContainText('波波头');
+    await page.locator('#character-cancel').click();
+    const download = page.waitForEvent('download');
+    await page.locator('#character-model-export').click();
+    const downloaded = await download;
+    const bytes = await readFile((await downloaded.path())!);
+    const gltf = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString('utf8'));
+    const meshNames = gltf.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined).map((node: { name: string }) => node.name);
+    expect(meshNames).toContain('bob01');
+    expect(meshNames).toContain('female_casualsuit02');
+    expect(meshNames).not.toContain('short01');
+    expect(meshNames).not.toContain('female_casualsuit01');
+    expect(gltf.images.length).toBeGreaterThanOrEqual(4);
+    const head = gltf.nodes.find((node: { name: string }) => node.name === 'head');
+    const rotation = new Quaternion();
+    if (head.matrix) new Matrix4().fromArray(head.matrix).decompose(new Vector3(), rotation, new Vector3());
+    else rotation.fromArray(head.rotation ?? [0, 0, 0, 1]);
+    expect(Math.abs(rotation.y)).toBeGreaterThan(0.05);
+    for (const mesh of gltf.meshes) {
+      expect(mesh.extras.targetNames).toHaveLength(44);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('FaceRound')]).toBeCloseTo(0.51);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('FaceSquare')]).toBeCloseTo(0);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('BodyWeight')]).toBeCloseTo(0.01);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('BodySlim')]).toBeCloseTo(0);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('HeadWidthNegative')]).toBeCloseTo(0.2);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('HeadWidth')]).toBeCloseTo(0);
+      expect(mesh.weights[mesh.extras.targetNames.indexOf('BodyMuscle')]).toBeCloseTo(0.25);
+    }
+    const bodyNode = gltf.nodes.find((node: { name?: string; mesh?: number }) => node.name?.startsWith('Body') && node.mesh !== undefined);
+    const body = gltf.meshes[bodyNode.mesh];
+    const target = body.primitives[0].targets[body.extras.targetNames.indexOf('HeadWidthNegative')].POSITION;
+    expect([...gltf.accessors[target].min, ...gltf.accessors[target].max].some(value => value !== 0)).toBe(true);
+    expect(page.context().pages()).toHaveLength(1);
+    await expect(page.locator('#viewport canvas')).toHaveCount(1);
+    expect(failures).toEqual([]);
+  } finally {
+    const current = await (await request.get('/api/data/settings/scene', { headers })).json();
+    if (current.value) await request.post('/api/data/settings/scene', { headers, data: {
+      revision: current.revision, value: { ...current.value, state: { ...current.value.state, character: 'mannequinFemale' } },
+    } });
+    if (identifier) await request.post(`/api/data/characters/${identifier}/delete`, { headers });
+  }
+});
+
+test('in-place character creation adds a selectable rotating character and restores appearance', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const token = (await (await request.get('/api/ai/status')).json()).token;
+  const headers = { 'X-Studio-Token': token };
+  let identifier: string | undefined;
+  const initialCount = (await (await request.get('/api/data/characters', { headers })).json()).items.length;
+  try {
+    await page.locator('#tab-cast').click();
+    await page.locator('[data-character="mannequinFemale"]').click();
+    await expect(page.locator('[data-character="mannequinFemale"]')).toHaveAttribute('aria-pressed', 'true');
+    const sourceDownload = page.waitForEvent('download');
+    await page.locator('#character-model-export').click();
+    const sourceBytes = await readFile((await (await sourceDownload).path())!);
+    const sourceModel = JSON.parse(sourceBytes.subarray(20, 20 + sourceBytes.readUInt32LE(12)).toString('utf8'));
+    const meshes: string[] = sourceModel.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined).map((node: { name: string }) => node.name);
+    await page.locator('#character-create').click();
+    await expect(page.locator('#character-creator')).toBeVisible();
+    await expect(page.locator('#character-creator').getByRole('tab')).toHaveCount(1);
+    await expect(page.locator('#character-creator')).not.toContainText('Porcelain');
+    expect(page.context().pages()).toHaveLength(1);
+    await expect(page.locator('#viewport canvas')).toHaveCount(1);
+    await expect(page.locator('#config-save')).toBeDisabled();
+    const width = page.locator('#creation-width [role="slider"]');
+    const rail = await page.locator('#creation-width .ant-slider-rail').boundingBox();
+    expect(rail?.width).toBeGreaterThan(100);
+    await width.press('ArrowRight');
+    await expect(width).toHaveAttribute('aria-valuenow', '1.01');
+    await page.locator('#character-cancel').click();
+    await expect(page.locator('#character-creator')).toHaveCount(0);
+    expect((await (await request.get('/api/data/characters', { headers })).json()).items).toHaveLength(initialCount);
+    await page.locator('#character-create').click();
+    await expect(width).toHaveAttribute('aria-valuenow', '1');
+    await page.locator('#character-name').fill('');
+    await expect(page.locator('#character-finish')).toBeDisabled();
+    await page.locator('#character-name').fill('站内定制测试');
+    await width.press('ArrowRight');
+    await page.locator('[data-material-color="0"]').evaluate((input: HTMLInputElement) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '#336699');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(new Set(meshes).size).toBeGreaterThanOrEqual(3);
+    const catalog = { version: 1, groups: [
+      { id: 'style', name: '网格方案', required: false, options: [
+        { id: 'first', name: '方案一', meshes: [meshes[0]], excludes: ['accessory'] },
+        { id: 'second', name: '方案二', meshes: [meshes[1]], excludes: [] },
+      ] },
+      { id: 'extra', name: '互斥方案', required: false, options: [
+        { id: 'accessory', name: '附加方案', meshes: [meshes[2]], excludes: [] },
+      ] },
+    ] };
+    const loadCatalog = async (data: unknown) => page.locator('#parts-input').setInputFiles({
+      name: 'parts.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(data)),
+    });
+    const invalidCatalog = structuredClone(catalog);
+    invalidCatalog.groups[0].options[0].meshes = ['missing-mesh'];
+    await loadCatalog(invalidCatalog);
+    await expect(page.locator('#status-message')).toContainText('网格不存在或重名');
+    await expect(page.locator('#part-style')).toHaveCount(0);
+    const choose = async (group: string, name: string) => {
+      await page.locator('.ant-select').filter({ has: page.locator(`#part-${group}`) }).locator('.ant-select-selector').click();
+      await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content').filter({ hasText: new RegExp(`^${name}$`) }).click();
+    };
+    const requiredCatalog = structuredClone(catalog);
+    requiredCatalog.groups[0].required = true;
+    await loadCatalog(requiredCatalog);
+    await expect(page.locator('#status-message')).toHaveText('部件清单已载入');
+    await choose('extra', '附加方案');
+    await expect(page.locator('#character-creator [role="alert"]')).toContainText('与必选部件方案一冲突');
+    await expect(page.locator('#part-style').locator('..').locator('..')).toContainText('方案一');
+    await expect(page.locator('#part-extra').locator('..').locator('..')).toContainText('无');
+    await loadCatalog(catalog);
+    await expect(page.locator('#character-creator [role="alert"]')).toHaveCount(0);
+    await expect(page.locator('#status-message')).toHaveText('部件清单已载入');
+    await choose('style', '方案一');
+    await choose('extra', '附加方案');
+    await expect(page.locator('#part-style').locator('..').locator('..')).toContainText('无');
+    await choose('style', '方案一');
+    await expect(page.locator('#part-extra').locator('..').locator('..')).toContainText('无');
+    const created = page.waitForResponse(response => response.url().endsWith('/api/data/characters/variants') && response.request().method() === 'POST');
+    await page.locator('#character-finish').click();
+    const asset = await (await created).json();
+    identifier = asset.id;
+    expect(asset.base).toBe('mannequinFemale');
+    expect(asset.appearance.width).toBe(1.01);
+    expect(asset.appearance.colors['0']).toBe('#336699');
+    expect(asset.appearance.parts.selected).toEqual({ style: 'first', extra: null });
+    await expect(page.locator('#character-creator')).toHaveCount(0);
+    await expect(page.locator('#model-credit')).toContainText('站内定制测试');
+    await page.locator('#tab-poses').click();
+    await page.locator('#star-rotation [role="slider"]').press('Home');
+    await expect(page.locator('#rotation-output')).toHaveText('-180°');
+    await page.locator('#config-save').click();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    const saved = (await (await request.get('/api/data/settings/scene', { headers })).json()).value;
+    expect(saved.state.character).toBe(`custom:${identifier}`);
+    expect(saved.state.rotation).toBe(-180);
+    await page.reload();
+    await expect(page.locator('#persistence-status')).toHaveText('已恢复本地配置');
+    await page.locator('#tab-cast').click();
+    await expect(page.locator('#model-credit')).toContainText('站内定制测试');
+    await page.locator('#character-create').click();
+    await expect(width).toHaveAttribute('aria-valuenow', '1.01');
+    await expect(page.locator('[data-material-color="0"]')).toHaveValue('#336699');
+    await expect(page.locator('#part-style').locator('..').locator('..')).toContainText('方案一');
+    await page.locator('#character-cancel').click();
+    const modelDownload = page.waitForEvent('download');
+    await page.locator('#character-model-export').click();
+    const downloaded = await modelDownload;
+    expect(downloaded.suggestedFilename()).toBe('站内定制测试.glb');
+    const glb = await readFile((await downloaded.path())!);
+    expect(glb.readUInt32LE(0)).toBe(0x46546c67);
+    const json = JSON.parse(glb.subarray(20, 20 + glb.readUInt32LE(12)).toString('utf8'));
+    expect(json.skins.length).toBeGreaterThan(0);
+    const visibleMeshes = json.nodes.filter((node: { mesh?: number }) => node.mesh !== undefined).map((node: { name: string }) => node.name);
+    expect(visibleMeshes).toContain(meshes[0]);
+    expect(visibleMeshes).not.toContain(meshes[1]);
+    expect(visibleMeshes).not.toContain(meshes[2]);
+  } finally {
+    const current = await (await request.get('/api/data/settings/scene', { headers })).json();
+    if (current.value) await request.post('/api/data/settings/scene', { headers, data: {
+      revision: current.revision, value: { ...current.value, state: { ...current.value.state, character: 'mannequinFemale' } },
+    } });
+    if (identifier) await request.post(`/api/data/characters/${identifier}/delete`, { headers });
+  }
+});
+
+test('custom VRM import persists, exports, undoes and preserves failed restores', async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const token = (await (await page.request.get('/api/ai/status')).json()).token;
+  const headers = { 'X-Studio-Token': token };
+  let identifier: string | undefined;
+  const openCast = async () => { await page.locator('#tab-cast').click(); };
+  const confirmImport = async () => {
+    const dialog = page.getByRole('dialog', { name: '导入自定义人偶' });
+    await expect(dialog.getByRole('button', { name: /^导\s*入$/ })).toBeDisabled();
+    await dialog.getByRole('checkbox').check();
+    await dialog.getByRole('button', { name: /^导\s*入$/ }).click();
+  };
+  try {
+    await openCast();
+    await expect(page.locator('#character-create')).not.toHaveAttribute('href');
+    await page.locator('#character-input').setInputFiles({ name: 'broken.vrm', mimeType: 'model/gltf-binary', buffer: Buffer.from('invalid') });
+    await confirmImport();
+    await expect(page.locator('#status-message')).toContainText('当前人偶已保留');
+    const bytes = await readFile(resolve('assets/characters/seed.vrm'));
+    const uploaded = page.waitForResponse(response => response.url().includes('/api/data/characters?') && response.request().method() === 'POST');
+    await page.locator('#character-input').setInputFiles({ name: 'creator-fixture.vrm', mimeType: 'model/gltf-binary', buffer: bytes });
+    await confirmImport();
+    identifier = (await (await uploaded).json()).id;
+    await expect(page.locator('#model-credit')).toContainText('creator-fixture.vrm');
+    await expect(page.locator('#config-save')).toBeEnabled();
+    await page.locator('#config-save').click();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    const saved = (await (await page.request.get('/api/data/settings/scene', { headers })).json()).value;
+    expect(saved.state.character).toBe(`custom:${identifier}`);
+    expect(JSON.stringify(saved).length).toBeLessThan(50_000);
+    await page.reload();
+    await expect(page.locator('#persistence-status')).toHaveText('已恢复本地配置');
+    await openCast();
+    await expect(page.locator('#model-credit')).toContainText('creator-fixture.vrm');
+    const downloadEvent = page.waitForEvent('download');
+    await page.locator('#character-export').click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toBe('creator-fixture.vrm');
+    expect(createHash('sha256').update(await readFile((await download.path())!)).digest('hex')).toBe(createHash('sha256').update(bytes).digest('hex'));
+    await page.locator('[data-character="mannequin"]').click();
+    await expect(page.locator('[data-character="mannequin"]')).toHaveAttribute('aria-pressed', 'true');
+    await page.locator('#undo-button').click();
+    await expect(page.locator('#model-credit')).toContainText('creator-fixture.vrm');
+    await page.locator('#config-save').click();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    const missingPath = `**/api/data/characters/${identifier}`;
+    await page.route(missingPath, route => route.fulfill({ status: 404, json: { error: 'not_found' } }));
+    await page.reload();
+    await expect(page.locator('#persistence-status')).toHaveText('配置读取失败');
+    expect((await (await page.request.get('/api/data/settings/scene', { headers })).json()).value.state.character).toBe(`custom:${identifier}`);
+    await page.unroute(missingPath);
+    await page.reload();
+    await expect(page.locator('#persistence-status')).toHaveText('已恢复本地配置');
+  } finally {
+    if (!page.isClosed()) await page.unrouteAll({ behavior: 'ignoreErrors' });
+    const current = await (await request.get('/api/data/settings/scene', { headers })).json();
+    if (current.value) await request.post('/api/data/settings/scene', { headers, data: {
+      revision: current.revision, value: { ...current.value, state: { ...current.value.state, character: 'mannequinFemale' } },
+    } });
+    if (identifier) await request.post(`/api/data/characters/${identifier}/delete`, { headers });
+  }
 });
 
 test('project session tracks edits, undo and pending saves without navigation writes', async ({ page }) => {

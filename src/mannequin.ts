@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { VRM, VRMHumanoid } from '@pixiv/three-vrm';
 
 export function createMannequin(scene: THREE.Object3D) {
-  const names: Record<string, string> = {
+  const suppliedNames = scene.children.find(child => child.userData.creator)?.userData.humanoid;
+  const names: Record<string, string> = suppliedNames ?? {
     hips: 'pelvis', spine: 'spine_01', chest: 'spine_02', upperChest: 'spine_03',
     neck: 'neck_01', head: 'Head',
   };
-  for (const [side, suffix] of [['left', 'l'], ['right', 'r']]) {
+  if (!suppliedNames) for (const [side, suffix] of [['left', 'l'], ['right', 'r']]) {
     for (const [joint, source] of Object.entries({ Shoulder: 'clavicle', UpperArm: 'upperarm', LowerArm: 'lowerarm', Hand: 'hand', UpperLeg: 'thigh', LowerLeg: 'calf', Foot: 'foot', Toes: 'ball' })) {
       names[`${side}${joint}`] = `${source}_${suffix}`;
     }
@@ -22,6 +23,7 @@ export function createMannequin(scene: THREE.Object3D) {
   }));
   const root = new THREE.Group();
   root.add(scene);
+  if (suppliedNames) root.userData.creator = true;
   root.updateMatrixWorld(true);
   const left = bones.leftUpperArm.node.getWorldPosition(new THREE.Vector3());
   const right = bones.rightUpperArm.node.getWorldPosition(new THREE.Vector3());
@@ -50,6 +52,6 @@ export function createMannequin(scene: THREE.Object3D) {
   return new VRM({
     scene: root,
     humanoid,
-    meta: { metaVersion: '1', name: 'White Mannequin', authors: ['Quaternius'], licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/' },
+    meta: { metaVersion: '1', name: suppliedNames ? 'Studio Human' : 'White Mannequin', authors: [suppliedNames ? 'MakeHuman Community' : 'Quaternius'], licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/' },
   });
 }

@@ -1,0 +1,22 @@
+[
+  { "key": "HeadWidth", "label": "脸宽", "section": "轮廓", "group": "face", "positive": ["head/head-scale-horiz-incr"], "negative": ["head/head-scale-horiz-decr"] },
+  { "key": "HeadHeight", "label": "脸长", "section": "轮廓", "group": "face", "positive": ["head/head-scale-vert-incr"], "negative": ["head/head-scale-vert-decr"] },
+  { "key": "ChinWidth", "label": "下巴宽度", "section": "下颌", "group": "face", "positive": ["chin/chin-width-incr"], "negative": ["chin/chin-width-decr"] },
+  { "key": "ChinHeight", "label": "下巴长度", "section": "下颌", "group": "face", "positive": ["chin/chin-height-incr"], "negative": ["chin/chin-height-decr"] },
+  { "key": "Jaw", "label": "下颌轮廓", "section": "下颌", "group": "face", "positive": ["chin/chin-bones-incr"], "negative": ["chin/chin-bones-decr"] },
+  { "key": "NoseWidth", "label": "鼻翼宽度", "section": "鼻子", "group": "face", "existing": true, "positive": ["nose/nose-scale-horiz-incr"], "negative": ["nose/nose-scale-horiz-decr"] },
+  { "key": "NoseDepth", "label": "鼻梁高度", "section": "鼻子", "group": "face", "existing": true, "positive": ["nose/nose-scale-depth-incr"], "negative": ["nose/nose-scale-depth-decr"] },
+  { "key": "NoseHeight", "label": "鼻子长度", "section": "鼻子", "group": "face", "positive": ["nose/nose-scale-vert-incr"], "negative": ["nose/nose-scale-vert-decr"] },
+  { "key": "EyeSize", "label": "眼睛大小", "section": "眼睛", "group": "face", "existing": true, "positive": ["eyes/l-eye-scale-incr", "eyes/r-eye-scale-incr"], "negative": ["eyes/l-eye-scale-decr", "eyes/r-eye-scale-decr"] },
+  { "key": "MouthWidth", "label": "嘴形宽度", "section": "嘴唇", "group": "face", "existing": true, "positive": ["mouth/mouth-scale-horiz-incr"], "negative": ["mouth/mouth-scale-horiz-decr"] },
+  { "key": "LipVolume", "label": "唇部厚度", "section": "嘴唇", "group": "face", "positive": ["mouth/mouth-upperlip-volume-incr", "mouth/mouth-lowerlip-volume-incr"], "negative": ["mouth/mouth-upperlip-volume-decr", "mouth/mouth-lowerlip-volume-decr"] },
+  { "key": "BodyTorso", "label": "躯干宽度", "section": "体格", "group": "body", "positive": ["torso/torso-scale-horiz-incr"], "negative": ["torso/torso-scale-horiz-decr"] },
+  { "key": "BodyHip", "label": "臀部宽度", "section": "体格", "group": "body", "positive": ["hip/hip-scale-horiz-incr"], "negative": ["hip/hip-scale-horiz-decr"] },
+  { "key": "BodyMuscle", "label": "肌肉轮廓", "section": "体格", "group": "body", "positive": ["torso/torso-muscle-pectoral-incr", "torso/torso-muscle-dorsi-incr"], "negative": ["torso/torso-muscle-pectoral-decr", "torso/torso-muscle-dorsi-decr"] },
+  { "key": "BodyNeck", "label": "颈部宽度", "section": "体格", "group": "body", "positive": ["neck/neck-scale-horiz-incr"], "negative": ["neck/neck-scale-horiz-decr"] },
+  { "key": "EyeSpacing", "label": "眼距", "section": "眼睛", "group": "face", "positive": ["eyes/l-eye-trans-out", "eyes/r-eye-trans-out"], "negative": ["eyes/l-eye-trans-in", "eyes/r-eye-trans-in"] },
+  { "key": "EyeHeight", "label": "眼睛位置", "section": "眼睛", "group": "face", "positive": ["eyes/l-eye-trans-up", "eyes/r-eye-trans-up"], "negative": ["eyes/l-eye-trans-down", "eyes/r-eye-trans-down"] },
+  { "key": "FaceAge", "label": "面部成熟度", "section": "轮廓", "group": "face", "positive": ["head/head-age-incr"], "negative": ["head/head-age-decr"] },
+  { "key": "BodyShoulder", "label": "肩部肌肉", "section": "体格", "group": "body", "positive": ["armslegs/l-upperarm-shoulder-muscle-incr", "armslegs/r-upperarm-shoulder-muscle-incr"], "negative": ["armslegs/l-upperarm-shoulder-muscle-decr", "armslegs/r-upperarm-shoulder-muscle-decr"] },
+  { "key": "BodyAbdomen", "label": "腹部紧致度", "section": "体格", "group": "body", "positive": ["stomach/stomach-tone-incr"], "negative": ["stomach/stomach-tone-decr"] }
+]
