@@ -1,11 +1,8 @@
 import { useRef, useSyncExternalStore } from 'react';
-import { createRoot } from 'react-dom/client';
-import { flushSync } from 'react-dom';
-import { Button, ConfigProvider, Input, Modal, Select, Tooltip } from 'antd';
+import { Button, Input, Modal, Select, Tooltip } from 'antd';
 import type { InputRef } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
 import { Check, Expand, Folder, Layers, Search, UserRound, X, icons } from 'lucide-react';
-import { studioTheme } from './components/StudioControls';
+import type { ViewHost } from './react-view';
 import type { PoseEntry, PoseLibrary } from './scene-types';
 
 interface BrowserState {
@@ -104,11 +101,10 @@ export function PoseBrowser({ model }: { model: ReturnType<typeof createModel> }
   </>;
 }
 
-export function createPoseBrowser(catalog: PoseLibrary, onSelect: (pose: PoseEntry) => void, root: ParentNode = document) {
+export function createPoseBrowser(catalog: PoseLibrary, onSelect: (pose: PoseEntry) => void, views: ViewHost, root: ParentNode = document) {
   const container = root.querySelector<HTMLElement>('#pose-library-home');
   if (!container) throw new Error('Missing pose library container');
   const model = createModel(catalog, onSelect);
-  const reactRoot = createRoot(container);
-  flushSync(() => reactRoot.render(<ConfigProvider locale={zhCN} theme={studioTheme}><PoseBrowser model={model} /></ConfigProvider>));
-  return { ...model, dispose() { reactRoot.unmount(); } };
+  const view = views.mount(container, <PoseBrowser model={model} />);
+  return { ...model, dispose: view.dispose };
 }

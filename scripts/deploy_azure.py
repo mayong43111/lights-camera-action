@@ -21,7 +21,7 @@ def package():
     subprocess.run([npm, 'run', 'build'], cwd=ROOT, check=True)
     target = ROOT / '.studio-data' / 'deploy' / 'studio.zip'
     target.parent.mkdir(parents=True, exist_ok=True)
-    names = ['server.py', 'storage.py', 'scene_schema.py', 'auth.py', 'requirements.txt',
+    names = ['server.py', 'studio_app.py', 'ai_service.py', 'storage.py', 'scene_schema.py', 'auth.py', 'requirements.txt',
              'dist/index.html', 'auth.css']
     for directory in ('dist/static', 'templates', 'assets'):
         names.extend(path.relative_to(ROOT).as_posix() for path in (ROOT / directory).rglob('*')

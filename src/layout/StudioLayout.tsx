@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Button, Tooltip } from 'antd';
 import { Box, Camera, Images, LampDesk, Layers, PanelLeftClose, PanelLeftOpen, PersonStanding, UserRound } from 'lucide-react';
 import { CreationPanel } from '../panels/ScenePanels';
 import { CameraPanel } from '../panels/CameraPanels';
 import { Viewport } from './StudioViewport';
+import { useStudio } from '../studio-context';
+import type { ToolKey } from '../studio-model';
 
 const tools = [
   { key: 'cast', label: '人物', Icon: UserRound },
@@ -14,10 +16,10 @@ const tools = [
   { key: 'camera', label: '镜头', Icon: Camera },
   { key: 'lights', label: '灯光', Icon: LampDesk },
 ] as const;
-type ToolKey = typeof tools[number]['key'];
 
 export function StudioLayout() {
-  const [active, setActive] = useState<ToolKey>('shots');
+  const { state, actions } = useStudio();
+  const active = state.activeTool;
   const [collapsed, setCollapsed] = useState(false);
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 700px)').matches);
   const inspector = useRef<HTMLElement>(null);
@@ -28,12 +30,12 @@ export function StudioLayout() {
     return () => media.removeEventListener('change', change);
   }, []);
   useEffect(() => {
-    window.dispatchEvent(new CustomEvent('studio:panel-change', { detail: active }));
+    setCollapsed(false);
     inspector.current?.scrollTo({ top: 0 });
   }, [active]);
-  function select(key: ToolKey) { setActive(key); setCollapsed(false); }
+  function select(key: ToolKey) { actions.selectTool(key); setCollapsed(false); }
   const label = tools.find(tool => tool.key === active)!.label;
-  return <main className={`workspace studio-workspace${collapsed ? ' is-panel-collapsed' : ''}`}>
+  return <main className={`workspace studio-workspace${collapsed ? ' is-panel-collapsed' : ''}`} style={{ '--frame-aspect': state.stage.aspect } as CSSProperties}>
     <nav className="tool-rail" aria-label="摄影棚工具">
       <div className="tool-navigation" role="tablist" aria-label="工具分类" aria-orientation={compact ? 'horizontal' : 'vertical'}>
         {tools.map(({ key, label, Icon }, index) => <Tooltip key={key} title={label} placement={compact ? 'top' : 'right'}>

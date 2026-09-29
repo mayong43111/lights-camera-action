@@ -5,7 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from server import ROOT, app, main, send_file
+from flask import send_file
+from server import main
+from studio_app import ROOT, app
 
 test_data = tempfile.TemporaryDirectory(prefix='studio-frontend-')
 app.config['STUDIO_DATA'] = Path(test_data.name)

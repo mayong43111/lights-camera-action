@@ -5,7 +5,7 @@ import type { SceneProp, Vector3Tuple } from './scene-types';
 import type { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Button } from 'antd';
 import { CopyPlus, Move3D, Plus, Rotate3D, Scaling, Scan, Trash2 } from 'lucide-react';
-import { mountView } from './react-view';
+import type { ViewHost } from './react-view';
 
 export function createPropModel(type: string, color: THREE.ColorRepresentation) {
   if (!Object.hasOwn(PROP_TYPES, type)) throw new Error('未知道具类型');
@@ -88,6 +88,7 @@ function disposeModel(group: THREE.Object3D) {
 }
 
 interface PropsOptions {
+  views: ViewHost;
   scene: THREE.Scene;
   root: HTMLElement;
   camera?: THREE.Camera;
@@ -102,7 +103,7 @@ interface PropsOptions {
   announce(message: string): void;
 }
 
-export function createPropsController({ scene, root, camera, canvas, orbit, onSelect = () => {}, canPick = () => true, onBeforeChange, onChange, onFrame, isAvailable, announce }: PropsOptions) {
+export function createPropsController({ scene, root, camera, canvas, orbit, views, onSelect = () => {}, canPick = () => true, onBeforeChange, onChange, onFrame, isAvailable, announce }: PropsOptions) {
   const group = new THREE.Group();
   group.name = 'Props';
   scene.add(group);
@@ -125,31 +126,31 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
   let mode: 'translate' | 'rotate' | 'scale' = 'translate';
   let drafts: Record<string, string> = {};
   let error = '';
-  const snapshot = () => ({ items: structuredClone(items), selected, type, mode, drafts: { ...drafts }, error });
-  const view = mountView(root, snapshot(), state => {
+  const snapshot = () => ({ items: structuredClone(items), selected, type, mode, drafts: { ...drafts }, error, available: isAvailable() });
+  const view = views.mountView(root, snapshot(), state => {
     const item = state.items.find(entry => entry.id === state.selected);
     return <>
-      <div className="shot-controls"><select id="prop-type" aria-label="添加道具类型" value={state.type} onChange={event => { type = event.target.value; view.update(snapshot()); }}>
+      <div className="shot-controls"><select id="prop-type" aria-label="添加道具类型" disabled={!state.available} value={state.type} onChange={event => { type = event.target.value; view.update(snapshot()); }}>
         {Object.entries(PROP_TYPES).map(([value, definition]) => <option key={value} value={value}>{definition.name}</option>)}
       </select><Button className="icon-button" id="prop-add" title="添加道具" aria-label="添加道具" icon={<Plus size={16} />}
-        disabled={state.items.length >= MAX_PROPS} onClick={add} /></div>
+        disabled={!state.available || state.items.length >= MAX_PROPS} onClick={add} /></div>
       <div className="prop-toolbar"><output id="prop-count">{state.items.length} / {MAX_PROPS}</output>
-        <Button className="icon-button" id="prop-frame" title="人物与全部道具取景" aria-label="全部取景" icon={<Scan size={16} />} onClick={() => { if (isAvailable()) onFrame(); }} />
-        <Button className="icon-button" id="prop-copy" title="复制选中道具" aria-label="复制道具" icon={<CopyPlus size={16} />} disabled={!item || state.items.length >= MAX_PROPS} onClick={copy} />
-        <Button className="icon-button" id="prop-delete" title="删除选中道具" aria-label="删除道具" icon={<Trash2 size={16} />} disabled={!item} onClick={remove} />
+        <Button className="icon-button" id="prop-frame" title="人物与全部道具取景" aria-label="全部取景" icon={<Scan size={16} />} disabled={!state.available} onClick={() => { if (isAvailable()) onFrame(); }} />
+        <Button className="icon-button" id="prop-copy" title="复制选中道具" aria-label="复制道具" icon={<CopyPlus size={16} />} disabled={!state.available || !item || state.items.length >= MAX_PROPS} onClick={copy} />
+        <Button className="icon-button" id="prop-delete" title="删除选中道具" aria-label="删除道具" icon={<Trash2 size={16} />} disabled={!state.available || !item} onClick={remove} />
       </div>
-      <select id="prop-list" size={4} aria-label="场景道具列表" value={state.selected ?? ''} onChange={event => { selected = event.target.value; sync(); }}>
+      <select id="prop-list" size={4} aria-label="场景道具列表" disabled={!state.available} value={state.selected ?? ''} onChange={event => { selected = event.target.value; sync(); }}>
         {state.items.map((entry, index) => <option key={entry.id} value={entry.id}>{String(index + 1).padStart(2, '0')} · {PROP_TYPES[entry.type].name}</option>)}
       </select>
       <div className="prop-transform" role="group" aria-label="道具变换模式">
         {([{ value: 'translate', label: '移动', Icon: Move3D }, { value: 'rotate', label: '旋转', Icon: Rotate3D }, { value: 'scale', label: '缩放', Icon: Scaling }] as const)
           .map(({ value, label, Icon }) => <Button key={value} className="icon-button" data-prop-mode={value} title={`${label}道具`} aria-label={`${label}道具`}
-            aria-pressed={state.mode === value} disabled={!item} icon={<Icon size={16} />} onClick={() => {
+            aria-pressed={state.mode === value} disabled={!state.available || !item} icon={<Icon size={16} />} onClick={() => {
               if (!isAvailable()) return;
               mode = value; gizmo?.setMode(value); gizmo?.setSpace(value === 'translate' ? 'world' : 'local'); view.update(snapshot());
             }} />)}
       </div>
-      <fieldset id="prop-fields" disabled={!item}><legend>道具参数</legend>
+      <fieldset id="prop-fields" disabled={!state.available || !item}><legend>道具参数</legend>
         {([['position', '位置', -20, 20], ['rotation', '旋转角度', -180, 180], ['size', '尺寸', 0.02, 10]] as const).map(([field, label, min, max]) =>
           <div className="prop-vector" key={field}><span>{label}</span><div>{['X', 'Y', 'Z'].map((axis, index) => {
             const value = item?.[field][index] ?? 0;
@@ -299,6 +300,7 @@ export function createPropsController({ scene, root, camera, canvas, orbit, onSe
   return {
     group,
     gizmo,
+    refresh: () => view.update(snapshot()),
     setEditing(value: boolean) { finishDrag(); editing = value; updateHelpers(); },
     setHelpersVisible(value: boolean) { finishDrag(); helpersVisible = value; updateHelpers(); },
     capture: () => structuredClone(items),

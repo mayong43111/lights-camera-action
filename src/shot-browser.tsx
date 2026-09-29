@@ -1,15 +1,16 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { Button, Checkbox, ConfigProvider, Input, Select, Tooltip } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
+import { Button, Checkbox, Input, Select, Tooltip } from 'antd';
 import { Clapperboard, Eye, ImagePlus, RefreshCw, Save, ScanEye, Trash2 } from 'lucide-react';
 import { SHOT_CATEGORIES } from './shot-presets';
 import { createShotModel } from './shot-model';
 import type { ShotModel, ShotModelOptions } from './shot-model';
-import { studioTheme } from './components/StudioControls';
+import type { ViewHost } from './react-view';
+import { useStudio } from './studio-context';
 
 export function ShotBrowser({ model }: { model: ShotModel }) {
+  const { state: studio } = useStudio();
+  const unavailable = !studio.ready || studio.busy || studio.capture.recording;
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot);
   const input = useRef<HTMLInputElement>(null);
   const selected = model.selected();
@@ -42,7 +43,7 @@ export function ShotBrowser({ model }: { model: ShotModel }) {
       <p id="shot-notes" className="shot-notes">{selected ? `${selected.sourceName}\n${selected.notes}` : ''}</p>
       <div className="prop-toolbar"><output id="shot-count">{model.builtIns.length ? `内置 ${model.builtIns.length} · 自存 ` : ''}{state.items.length} / 100</output>
         <Tooltip title="应用预设，替换姿势、道具、镜头和灯光"><Button id="shot-apply" className="icon-button" aria-label="应用配置预设"
-          icon={<Clapperboard size={16} />} disabled={state.busy || !selected} onClick={() => void model.applySelected()} /></Tooltip>
+          icon={<Clapperboard size={16} />} disabled={unavailable || state.busy || !selected} onClick={() => void model.applySelected()} /></Tooltip>
         <Tooltip title="删除预设"><Button id="shot-delete" className="icon-button" aria-label="删除预设" icon={<Trash2 size={16} />}
           disabled={state.busy || !state.loaded || !selected || model.builtInIds.has(selected.id)} onClick={() => void model.removeSelected()} /></Tooltip>
       </div>
@@ -70,7 +71,7 @@ export function ShotBrowser({ model }: { model: ShotModel }) {
           value={state.draft?.category} disabled={state.busy} onChange={category => model.editDraft({ category })} />
         <p id="shot-result-notes" className="shot-notes">{state.draft?.notes}</p>
         <div className="prop-toolbar"><Tooltip title="在场景中预览生成配置"><Button id="shot-preview-result" className="icon-button"
-          aria-label="预览生成配置" icon={<Eye size={16} />} disabled={state.busy || !state.draft} onClick={() => void model.previewDraft()} /></Tooltip>
+          aria-label="预览生成配置" icon={<Eye size={16} />} disabled={unavailable || state.busy || !state.draft} onClick={() => void model.previewDraft()} /></Tooltip>
           <Button id="shot-save-result" icon={<Save size={16} />} disabled={state.busy || !state.draft || !state.loaded || state.items.length >= 100}
             onClick={() => void model.saveDraft()}>保存预设</Button></div>
       </fieldset>
@@ -78,11 +79,8 @@ export function ShotBrowser({ model }: { model: ShotModel }) {
   </div>;
 }
 
-export function createShotBrowser({ root, ...options }: ShotModelOptions & { root: HTMLElement }) {
+export function createShotBrowser({ root, views, ...options }: ShotModelOptions & { root: HTMLElement; views: ViewHost }) {
   const model = createShotModel(options);
-  const reactRoot = createRoot(root);
-  flushSync(() => reactRoot.render(<ConfigProvider locale={zhCN} theme={studioTheme}>
-    <ShotBrowser model={model} />
-  </ConfigProvider>));
-  return { model, ready: model.ready.then(() => { flushSync(() => {}); }), dispose() { model.dispose(); reactRoot.unmount(); } };
+  const view = views.mount(root, <ShotBrowser model={model} />);
+  return { model, ready: model.ready.then(() => { flushSync(() => {}); }), dispose() { model.dispose(); view.dispose(); } };
 }

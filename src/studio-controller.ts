@@ -1,13 +1,11 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { createStudioRuntime } from './studio-runtime';
+import type { PhotographySettings, LightSettings, StudioModel, CharacterSettings, StudioOperation, ImportKind } from './studio-model';
+import type { ViewHost } from './react-view';
 import { Character, CHARACTERS } from './character';
 import { JOINTS, validPose } from './pose-schema';
 import { createDefaultState, validProject } from './project-schema';
+import { createProjectSession } from './project-session';
 import { createRetouch } from './retouch';
 import { loadPoseLibrary } from './pose-library';
 import { createPoseBrowser } from './pose-browser';
@@ -21,14 +19,15 @@ import { createShotProject, loadBuiltInShots } from './shot-presets';
 import { createShotBrowser } from './shot-browser';
 import { createPropsController } from './props';
 import { requiredElement as element } from './dom';
-import { isRecord } from './schema-utils';
 import { createLifetime } from './lifetime';
-import type { JointPose, NumericInput, ProjectState, Vector3Tuple } from './scene-types';
+import type { JointPose, ProjectState, Vector3Tuple } from './scene-types';
 
-export async function createStudioController(signal?: AbortSignal) {
+export async function createStudioController(signal: AbortSignal | undefined, model: StudioModel, views: ViewHost) {
 const lifetime = createLifetime(signal);
 try {
     lifetime.signal.throwIfAborted();
+    model.setAvailability({ ready: false, loading: true, busy: false });
+    model.setCapture({ takeNumber: 1, recording: false, stopping: false, elapsed: 0 });
     const builtInPoseLibrary = await loadPoseLibrary();
     lifetime.signal.throwIfAborted();
     const builtInShotPresets = await loadBuiltInShots(builtInPoseLibrary);
@@ -41,81 +40,29 @@ try {
       applyPose(pose.id);
       announce(`已切换为${pose.name}`);
       scheduleConfiguration();
-    });
+    }, views);
     lifetime.defer(() => poseBrowser.dispose());
 
     const viewport = element<HTMLElement>('#viewport');
-    const viewportFrame = element<HTMLElement>('#viewport-frame');
-    const statusMessage = element<HTMLElement>('#status-message');
     const libraryClient = createLibraryClient();
-    const library: ReturnType<typeof createLibrary> = createLibrary({ client: libraryClient, announce,
+    const library: ReturnType<typeof createLibrary> = createLibrary({ client: libraryClient, announce, views,
       onUse: (asset, image) => retouch.useAsset(asset, image),
       onDelete: id => retouch.removeAsset(id),
     });
     lifetime.defer(() => library.dispose());
-    const retouch: ReturnType<typeof createRetouch> = createRetouch(() => takePhoto({ archive: false }), { client: libraryClient, library });
+    const retouch: ReturnType<typeof createRetouch> = createRetouch(() => takePhoto({ archive: false }), {
+      client: libraryClient, library, views, onBusyChange: model.setRetouchBusy,
+    });
     lifetime.defer(() => retouch.dispose());
 
-    const scene = new THREE.Scene();
-    lifetime.defer(() => disposeScene());
-    scene.background = new THREE.Color('#eef2f4');
-
-    const camera = new THREE.PerspectiveCamera(32, 1.5, 0.1, 100);
-    camera.position.set(0.8, 2.1, 7.5);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    lifetime.defer(() => { renderer.setAnimationLoop(null); renderer.dispose(); renderer.forceContextLoss(); renderer.domElement.remove(); });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.shadowMap.enabled = false;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.5;
-    viewport.append(renderer.domElement);
-    const environmentGenerator = new THREE.PMREMGenerator(renderer);
-    const environmentRoom = new RoomEnvironment();
-    const environmentTarget = environmentGenerator.fromScene(environmentRoom, 0.04);
-    lifetime.defer(() => environmentTarget.dispose());
-    scene.environment = environmentTarget.texture;
-    scene.environmentIntensity = 0.45;
-    environmentRoom.dispose();
-    environmentGenerator.dispose();
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    lifetime.defer(() => controls.dispose());
-    controls.target.set(0, 1.65, 0);
-    controls.enableDamping = true;
-    controls.minDistance = 0;
-    controls.maxDistance = Infinity;
-    controls.minPolarAngle = 0;
-    controls.maxPolarAngle = Math.PI;
-
-    const renderTarget = new THREE.WebGLRenderTarget(1, 1, {
-      type: THREE.HalfFloatType,
-      samples: Math.min(4, renderer.capabilities.maxSamples),
+    const runtime = createStudioRuntime({
+      viewport, pixelRatio: Math.min(window.devicePixelRatio, 2),
+      update: delta => star.update(delta),
+      canResize: () => !capture.isRecording,
+      onResize: (width, height) => model.setResolution(`${width} × ${height}`),
     });
-    const composer = new EffectComposer(renderer, renderTarget);
-    lifetime.defer(() => { composer.passes.forEach(pass => pass.dispose()); composer.dispose(); });
-    composer.addPass(new RenderPass(scene, camera));
-    const bokehPass = new BokehPass(scene, camera, {
-      focus: 9,
-      aperture: 0.000001,
-      maxblur: 0.002,
-    });
-    function hasBokehUniforms(value: object): value is Record<'focus' | 'aspect' | 'aperture' | 'maxblur', THREE.IUniform<number>> {
-      return ['focus', 'aspect', 'aperture', 'maxblur'].every(name => {
-        const uniform: unknown = Reflect.get(value, name);
-        return isRecord(uniform) && typeof uniform.value === 'number';
-      });
-    }
-    const bokehUniforms = (() => {
-      const uniforms = bokehPass.uniforms;
-      if (!hasBokehUniforms(uniforms)) throw new Error('景深参数未正确初始化');
-      return uniforms;
-    })();
-    composer.addPass(bokehPass);
-    bokehPass.enabled = false;
-    composer.addPass(new OutputPass());
+    lifetime.defer(runtime.dispose);
+    const { scene, camera, renderer, composer, controls } = runtime;
 
     const studio = createStudio();
     scene.add(studio.group);
@@ -133,25 +80,35 @@ try {
 
     let currentPose = poseLibrary.defaultPose;
     let poseSaveTarget: string | null = currentPose;
-    let currentAspect = 1.5;
-    let history: string[] = [];
-    let isRestoringState = false;
     let backgroundData: string | null = null;
     let backgroundLoadVersion = 0;
-    let previousFrameTime = 0;
     let poseCustomized = false;
     let modelLoading = false;
-    let persistenceReady = false;
-    let configurationTimer: ReturnType<typeof setTimeout> | undefined;
-    let configurationSaving = 0;
-    let configurationDirty = false;
-    let configurationVersion = 0;
-    lifetime.defer(() => { lifetime.clearTimer(configurationTimer); backgroundLoadVersion++; });
+    lifetime.defer(() => { backgroundLoadVersion++; });
+    const project = createProjectSession({
+      capture: captureState,
+      apply: applyProjectState,
+      save: state => libraryClient.saveSettings('scene', { version: 1, state }),
+      isBusy: () => modelLoading,
+      onError: error => announce(error instanceof Error ? error.message : String(error)),
+    });
+    lifetime.defer(project.dispose);
+    lifetime.defer(project.subscribe(() => {
+      const state = project.getSnapshot();
+      model.setAvailability({ ready: state.ready, busy: modelLoading || state.restoring });
+      props.refresh();
+      poseSaving.update();
+      model.setPersistence({
+        loading: '正在读取配置', 'load-error': '配置读取失败', unsaved: '配置尚未保存',
+        restored: '已恢复本地配置', pending: '配置待保存', saving: '正在保存配置',
+        saved: '配置已保存到本机', 'save-error': '配置保存失败',
+      }[state.status]);
+    }));
 
     const capture: ReturnType<typeof createCaptureController> = createCaptureController({
       renderer, composer, camera, character: star, floorMarks: studio.floorMarks,
-      getAspect: () => currentAspect,
-      isLoading: () => modelLoading,
+      getAspect: () => model.getSnapshot().stage.aspect,
+      isLoading: () => modelLoading || project.getSnapshot().restoring,
       setHelpersVisible: visible => props.setHelpersVisible(visible),
       onPhoto: async (image, name) => {
         retouch.setPhoto(image, name);
@@ -160,35 +117,39 @@ try {
         announce('已存入拍摄相册');
       },
       onResize: () => { resizeViewport(); poseSaving.update(); },
+      onStateChange: state => { model.setCapture(state); poseSaving.update(); props.refresh(); syncJointControls(); },
       announce,
     });
     const { takePhoto, toggleRecording } = capture;
     const poseSaving = createPoseSaveControls({
+      views,
       getEntry: () => poseLibrary.poses.find((pose) => pose.id === poseSaveTarget),
       getFolders: () => [...new Set(poseLibrary.poses.map((pose) => pose.folder))],
       capturePose: () => star.capturePose(),
-      isAvailable: () => !modelLoading && !!star.vrm && !capture.isRecording,
+      isAvailable: () => !modelLoading && !project.getSnapshot().restoring && !!star.vrm && !capture.isRecording,
       save: (snapshot) => saveLibraryPose(snapshot),
       saveAs: (details, snapshot) => saveLibraryPose(snapshot, details),
       announce,
     });
     lifetime.defer(() => poseSaving.dispose());
     const props: ReturnType<typeof createPropsController> = createPropsController({
+      views,
       scene, camera, canvas: renderer.domElement, orbit: controls, root: element<HTMLElement>('#prop-controls'),
       canPick: () => !star.editing,
-      onSelect: () => element<HTMLElement>('#tab-props').click(),
+      onSelect: () => model.selectTool('props'),
       onBeforeChange: rememberState, onChange: scheduleConfiguration,
       onFrame: () => frameCharacter('scene'),
-      isAvailable: () => !modelLoading && !isRestoringState && !capture.isRecording,
+      isAvailable: () => !modelLoading && !project.getSnapshot().restoring && !capture.isRecording,
       announce,
     });
     lifetime.defer(() => props.dispose());
     lifetime.defer(() => capture.dispose());
 
     const shotBrowser = createShotBrowser({
+      views,
       root: element<HTMLElement>('#panel-shots'), client: libraryClient,
       builtIns: builtInShotPresets,
-      isAvailable: () => persistenceReady && !modelLoading && !isRestoringState && !capture.isRecording,
+      isAvailable: () => project.getSnapshot().ready && !modelLoading && !project.getSnapshot().restoring && !capture.isRecording,
       apply: async preset => {
         rememberState();
         await restoreState(createShotProject(preset).state);
@@ -196,19 +157,41 @@ try {
       },
     });
     lifetime.defer(() => shotBrowser.dispose());
+    lifetime.defer(model.connect({
+      run: runOperation,
+      importFile,
+      setCharacter: changeCharacter,
+      setStage: patch => {
+        rememberState();
+        model.setStage(patch);
+        if (patch.backdrop !== undefined) { studio.material.color.set(patch.backdrop); void setBackground(null); }
+        if (patch.aspect !== undefined) lifetime.frame(resizeViewport);
+        scheduleConfiguration();
+      },
+      beginEdit: rememberState,
+      setPhotography: patch => { applyPhotography(patch); scheduleConfiguration(); },
+      frame: mode => frameCharacter(mode),
+      selectTool: panel => {
+        props.setEditing(panel === 'props');
+        if (panel !== 'poses') {
+          star.setEditing(false);
+          syncJointControls();
+        }
+      },
+    }));
 
     applyPose(currentPose);
-    buildLightControls();
-    buildJointControls();
-    bindInterface();
+    applyPhotography(model.getSnapshot().photography);
+    syncJointControls();
+    controls.addEventListener('start', rememberState);
+    lifetime.defer(() => controls.removeEventListener('start', rememberState));
     window.lucide?.createIcons();
     updateRigVisibility();
     resizeViewport();
-    renderer.setAnimationLoop(render);
-    lifetime.defer(() => renderer.setAnimationLoop(null));
+    runtime.start();
     await switchCharacter('mannequinFemale', false);
     lifetime.signal.throwIfAborted();
-    element<HTMLElement>('#loading-state').classList.add('is-hidden');
+    model.setAvailability({ loading: false });
     if (poseStore.warning) announce(poseStore.warning);
     try {
       const saved = await libraryClient.settings('scene');
@@ -218,22 +201,17 @@ try {
         if (!await restoreState(saved.state)) throw new Error('配置中的人偶加载失败，未覆盖已存配置。');
       }
       lifetime.signal.throwIfAborted();
-      persistenceReady = true;
-      element<HTMLButtonElement>('#config-save').disabled = false;
-      element<HTMLElement>('#persistence-status').textContent = saved ? '已恢复本地配置' : '配置尚未保存';
+      project.activate(Boolean(saved));
     } catch (error) {
       lifetime.signal.throwIfAborted();
-      element<HTMLElement>('#persistence-status').textContent = '配置读取失败';
+      project.failLoading();
       announce(error instanceof Error ? error.message : String(error));
     }
-    element<HTMLElement>('#config-save').addEventListener('click', saveConfiguration, { signal: lifetime.signal });
-    element<HTMLElement>('.workspace').addEventListener('input', scheduleConfiguration, { signal: lifetime.signal });
-    element<HTMLElement>('.workspace').addEventListener('change', scheduleConfiguration, { signal: lifetime.signal });
-    element<HTMLElement>('.workspace').addEventListener('click', scheduleConfiguration, { signal: lifetime.signal });
     controls.addEventListener('end', scheduleConfiguration);
     lifetime.defer(() => controls.removeEventListener('end', scheduleConfiguration));
     window.addEventListener('beforeunload', event => {
-      if (configurationDirty || configurationSaving || retouch.hasPendingChanges || library.hasPending) {
+      const state = project.getSnapshot();
+      if (state.dirty || state.saving || retouch.hasPendingChanges || library.hasPending) {
         event.preventDefault();
         event.returnValue = '';
       }
@@ -241,38 +219,7 @@ try {
     return { dispose: lifetime.dispose };
 
     function scheduleConfiguration() {
-      if (lifetime.signal.aborted || !persistenceReady || isRestoringState) return;
-      configurationDirty = true;
-      configurationVersion++;
-      element<HTMLElement>('#persistence-status').textContent = '配置待保存';
-      lifetime.clearTimer(configurationTimer);
-      configurationTimer = lifetime.timeout(saveConfiguration, 750);
-    }
-
-    async function saveConfiguration() {
-      lifetime.clearTimer(configurationTimer);
-      configurationTimer = undefined;
-      if (lifetime.signal.aborted || !persistenceReady) return;
-      if (modelLoading || isRestoringState) {
-        configurationTimer = lifetime.timeout(saveConfiguration, 500);
-        return;
-      }
-      const version = configurationVersion;
-      configurationSaving++;
-      element<HTMLElement>('#persistence-status').textContent = '正在保存配置';
-      try {
-        await libraryClient.saveSettings('scene', { version: 1, state: captureState() });
-        if (lifetime.signal.aborted) return;
-        if (version === configurationVersion) {
-          configurationDirty = false;
-          element<HTMLElement>('#persistence-status').textContent = '配置已保存到本机';
-        }
-      } catch (error) {
-        if (lifetime.signal.aborted) return;
-        configurationDirty = true;
-        element<HTMLElement>('#persistence-status').textContent = '配置保存失败';
-        announce(error instanceof Error ? error.message : String(error));
-      } finally { configurationSaving--; }
+      if (!lifetime.signal.aborted) project.changed();
     }
 
     function applyPose(name: string) {
@@ -285,9 +232,6 @@ try {
         rotation: entry.rotation ?? star.group.rotation.y,
         placement: entry.placement ?? { grounded: star.grounded, height: star.height },
       });
-      const degrees = THREE.MathUtils.radToDeg(star.group.rotation.y);
-      element<HTMLInputElement>('#star-rotation').value = String(degrees);
-      element<HTMLOutputElement>('#rotation-output').value = `${Number(degrees.toFixed(1))}°`;
       syncPlacementControls();
       poseCustomized = false;
       syncJointControls();
@@ -311,167 +255,41 @@ try {
       scheduleConfiguration();
     }
 
-    function buildLightControls() {
-      const container = element<HTMLElement>('#light-controls');
-      lightDefinitions.forEach((definition) => {
-        const article = element<HTMLElement>(`[data-light="${definition.id}"]`, container);
-        article.dataset.light = definition.id;
-        element<HTMLElement>('.light-index', article).textContent = definition.index;
-        element<HTMLElement>('.light-name', article).textContent = definition.name;
-        const intensity = element<HTMLInputElement>('.light-intensity', article);
-        intensity.value = String(definition.intensity);
-        const output = element<HTMLOutputElement>('.light-output', article);
-        output.value = definition.intensity.toFixed(1);
-        const color = element<HTMLInputElement>('.light-color', article);
-        color.value = definition.color;
-        const position = element<HTMLInputElement>('.light-position', article);
-        position.value = String(definition.position[0]);
-        element<HTMLInputElement>('.light-height', article).value = String(definition.position[1]);
-        element<HTMLInputElement>('.light-depth', article).value = String(definition.position[2]);
-        article.querySelectorAll('input').forEach((input) => {
-          const label = input.closest('label')?.textContent?.trim() ?? '';
-          input.setAttribute('aria-label', `${definition.name}${label}`);
-        });
-      });
+    async function runOperation(operation: StudioOperation) {
+      try {
+        switch (operation) {
+          case 'save': await project.save(); break;
+          case 'export': saveProject(); break;
+          case 'undo': await undo(); break;
+          case 'reset': await resetStudio(); break;
+          case 'photo': takePhoto(); break;
+          case 'record': toggleRecording(); break;
+          case 'library': library.open('photo'); break;
+          case 'retouch': await retouch.open(); break;
+          case 'exportPose': downloadJson(star.capturePose(), 'studio-pose.json'); break;
+          case 'clearBackground': rememberState(); await setBackground(null); break;
+          case 'resetJoint': rememberState(); star.setJoint(star.selected, poses[currentPose][star.selected] ?? [0, 0, 0]); onJointChange(star.selected); break;
+        }
+      } catch (error) { announce(error instanceof Error ? error.message : String(error)); }
     }
 
-    function bindInterface() {
-      window.addEventListener('studio:panel-change', event => {
-        const panel = event.detail;
-        if (!['cast', 'shots', 'poses', 'props', 'stage', 'camera', 'lights'].includes(panel)) return;
-        props.setEditing(panel === 'props');
-        if (panel !== 'poses') {
-          star.setEditing(false);
-          element<HTMLInputElement>('#edit-joints').checked = false;
-        }
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#framing-controls').addEventListener('click', (event) => {
-        const button = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-framing]') : null;
-        if (button?.dataset.framing && !modelLoading) frameCharacter(button.dataset.framing);
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#character-controls').addEventListener('click', (event) => {
-        const button = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-character]') : null;
-        if (button?.dataset.character && !modelLoading && !capture.isRecording) switchCharacter(button.dataset.character);
-      }, { signal: lifetime.signal });
-      element<HTMLSelectElement>('#joint-select').addEventListener('change', () => { star.select(element<HTMLSelectElement>('#joint-select').value); syncJointControls(); }, { signal: lifetime.signal });
-      element<HTMLInputElement>('#edit-joints').addEventListener('change', () => star.setEditing(element<HTMLInputElement>('#edit-joints').checked), { signal: lifetime.signal });
-      element<HTMLInputElement>('#auto-ground').addEventListener('change', () => {
-        rememberState();
-        star.setGrounded(element<HTMLInputElement>('#auto-ground').checked);
-        syncPlacementControls();
-        onJointChange(star.selected);
-      }, { signal: lifetime.signal });
-      for (const selector of ['#character-height', '#character-height-value']) {
-        const input = element<HTMLInputElement>(selector);
-        input.addEventListener('pointerdown', rememberState, { signal: lifetime.signal });
-        input.addEventListener('focus', rememberState, { signal: lifetime.signal });
-        input.addEventListener('input', () => {
-          if (input.value === '' || !Number.isFinite(Number(input.value))) return;
-          star.setHeight(Number(input.value));
-          syncPlacementControls();
-          onJointChange(star.selected);
-        }, { signal: lifetime.signal });
-      }
-      element<HTMLSelectElement>('#pose-mode').addEventListener('change', () => {
-        const mode = element<HTMLSelectElement>('#pose-mode').value;
-        star.setEditMode(mode);
-        element<HTMLInputElement>('#edit-joints').checked = true;
-        star.setEditing(true);
-        syncJointControls();
-        announce(mode === 'ik' ? '手脚 IK 拖拽已开启' : '关节旋转已开启');
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#joint-reset').addEventListener('click', () => {
-        rememberState();
-        star.setJoint(star.selected, poses[currentPose][star.selected] ?? [0, 0, 0]);
-        onJointChange(star.selected);
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#pose-export').addEventListener('click', () => downloadJson(star.capturePose(), 'studio-pose.json'), { signal: lifetime.signal });
-      element<HTMLElement>('#pose-import').addEventListener('click', () => element<HTMLInputElement>('#pose-input').click(), { signal: lifetime.signal });
-      element<HTMLInputElement>('#pose-input').addEventListener('change', importPose, { signal: lifetime.signal });
-      element<HTMLElement>('#backdrop-controls').addEventListener('click', (event) => {
-        const button = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-color]') : null;
-        if (!button?.dataset.color || button.classList.contains('is-active')) return;
-        rememberState();
-        setActiveButton(button);
-        studio.material.color.set(button.dataset.color);
-        setBackground(null);
-        announce('背景颜色已更新');
-      }, { signal: lifetime.signal });
+    async function importFile(kind: ImportKind, file: File) {
+      if (kind === 'project') await loadProject(file);
+      else if (kind === 'pose') await importPose(file);
+      else await importBackground(file);
+    }
 
-      element<HTMLElement>('#aspect-controls').addEventListener('click', (event) => {
-        const button = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-aspect]') : null;
-        if (!button || button.classList.contains('is-active')) return;
-        rememberState();
-        setActiveButton(button);
-        currentAspect = Number(button.dataset.aspect);
-        document.documentElement.style.setProperty('--frame-aspect', String(currentAspect));
-        lifetime.frame(resizeViewport);
-        announce(`画幅已切换为 ${button.textContent}`);
-      }, { signal: lifetime.signal });
-
-      bindRange('#star-rotation', '#rotation-output', (value, output) => {
-        star.group.rotation.y = THREE.MathUtils.degToRad(value);
-        output.value = `${value}°`;
-        if (!isRestoringState && star.vrm) onJointChange(star.selected);
-      });
-      bindRange('#focal-length', '#focal-output', (value, output) => {
-        camera.setFocalLength(value);
-        output.value = `${Math.round(value)} mm`;
-        element<HTMLElement>('#lens-readout').textContent = `${Math.round(value)} MM`;
-      });
-      bindRange('#exposure', '#exposure-output', (value, output) => {
-        renderer.toneMappingExposure = value;
-        const ev = Math.log2(value);
-        output.value = `${ev >= 0 ? '+' : ''}${ev.toFixed(1)} EV`;
-      });
-      bindRange('#depth-of-field', '#dof-output', (value, output) => {
-        const strength = value / 100;
-        bokehPass.enabled = value > 0;
-        bokehUniforms.aperture.value = strength * 0.00008 + 0.000001;
-        bokehUniforms.maxblur.value = strength * 0.012 + 0.001;
-        output.value = value === 0 ? '关闭' : `${value}%`;
-        element<HTMLElement>('#aperture-readout').textContent = value === 0 ? 'f/5.6' : `f/${(5.6 - strength * 4.2).toFixed(1)}`;
-      });
-
-      element<HTMLElement>('#light-controls').addEventListener('pointerdown', (event) => {
-        if (event.target instanceof HTMLInputElement) rememberState();
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#light-controls').addEventListener('input', updateLightFromControl, { signal: lifetime.signal });
-      element<HTMLElement>('#light-controls').addEventListener('change', updateLightFromControl, { signal: lifetime.signal });
-      document.querySelectorAll('input').forEach((input) => input.addEventListener('keydown', (event) => {
-        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Home', 'End'].includes(event.key)) rememberState();
-      }, { signal: lifetime.signal }));
-      element<HTMLInputElement>('#auto-orbit').addEventListener('change', () => {
-        controls.autoRotate = element<HTMLInputElement>('#auto-orbit').checked;
-        controls.autoRotateSpeed = 0.6;
-      }, { signal: lifetime.signal });
-      element<HTMLInputElement>('#show-rigs').addEventListener('change', updateRigVisibility, { signal: lifetime.signal });
-      element<HTMLInputElement>('#remove-shadows').addEventListener('change', () => {
-        rememberState();
-        updateShadows();
-      }, { signal: lifetime.signal });
-      ['#auto-orbit', '#show-rigs'].forEach((selector) => element<HTMLElement>(selector).addEventListener('pointerdown', rememberState, { signal: lifetime.signal }));
-      element<HTMLElement>('#save-button').addEventListener('click', saveProject, { signal: lifetime.signal });
-      element<HTMLElement>('#load-button').addEventListener('click', () => element<HTMLInputElement>('#project-input').click(), { signal: lifetime.signal });
-      element<HTMLInputElement>('#project-input').addEventListener('change', loadProject, { signal: lifetime.signal });
-      element<HTMLElement>('#background-import').addEventListener('click', () => element<HTMLInputElement>('#background-input').click(), { signal: lifetime.signal });
-      element<HTMLInputElement>('#background-input').addEventListener('change', importBackground, { signal: lifetime.signal });
-      element<HTMLElement>('#background-clear').addEventListener('click', () => { rememberState(); setBackground(null); }, { signal: lifetime.signal });
-      element<HTMLElement>('#photo-button').addEventListener('click', () => {
-        try { takePhoto(); } catch (error) {
-          console.error(error);
-          announce('图片导出失败，请降低分辨率或更换浏览器');
-        }
-      }, { signal: lifetime.signal });
-      element<HTMLElement>('#record-button').addEventListener('click', toggleRecording, { signal: lifetime.signal });
-      element<HTMLElement>('#reset-button').addEventListener('click', resetStudio, { signal: lifetime.signal });
-      element<HTMLElement>('#undo-button').addEventListener('click', undo, { signal: lifetime.signal });
-      window.addEventListener('resize', resizeViewport, { signal: lifetime.signal });
-      const observer = new ResizeObserver(resizeViewport);
-      observer.observe(viewportFrame);
-      lifetime.defer(() => observer.disconnect());
-      controls.addEventListener('start', rememberState);
-      lifetime.defer(() => controls.removeEventListener('start', rememberState));
+    async function changeCharacter(patch: Partial<CharacterSettings>) {
+      if (patch.id !== undefined) { await switchCharacter(patch.id); return; }
+      if (patch.selected !== undefined) star.select(patch.selected);
+      if (patch.mode !== undefined) { star.setEditMode(patch.mode); star.setEditing(true); model.setCharacter({ mode: patch.mode }); }
+      if (patch.editing !== undefined) star.setEditing(patch.editing);
+      if (patch.grounded !== undefined) { rememberState(); star.setGrounded(patch.grounded); }
+      if (patch.rotation !== undefined) star.group.rotation.y = THREE.MathUtils.degToRad(patch.rotation);
+      if (patch.height !== undefined) star.setHeight(patch.height);
+      if (patch.angles) star.setJoint(star.selected, patch.angles.map(angle => THREE.MathUtils.degToRad(THREE.MathUtils.clamp(angle, -180, 180))) as Vector3Tuple);
+      const edited = patch.grounded !== undefined || patch.rotation !== undefined || patch.height !== undefined || !!patch.angles;
+      onJointChange(star.selected, edited);
     }
 
     function frameCharacter(mode: string, shot: { direction: Vector3Tuple; offset?: number } | null = null) {
@@ -479,8 +297,7 @@ try {
       if (!bounds) return;
       if (mode === 'scene') bounds.union(props.getBounds());
       if (!shot) rememberState();
-      controls.autoRotate = false;
-      element<HTMLInputElement>('#auto-orbit').checked = false;
+      applyPhotography({ autoOrbit: false });
       controls.enableDamping = false;
       controls.update();
       const center = bounds.getCenter(new THREE.Vector3());
@@ -509,34 +326,29 @@ try {
       controls.update();
       controls.enableDamping = true;
       const names: Record<string, string> = { full: '全身取景', half: '半身取景', face: '面部特写', low: '低机位仰拍', scene: '人物与全部道具取景' };
+      scheduleConfiguration();
       announce(`已切换为${names[mode] ?? mode}`);
     }
 
-    function bindRange(inputSelector: string, outputSelector: string, update: (value: number, output: HTMLOutputElement) => void) {
-      const input = element<HTMLInputElement>(inputSelector);
-      const output = element<HTMLOutputElement>(outputSelector);
-      input.addEventListener('pointerdown', rememberState, { signal: lifetime.signal });
-      input.addEventListener('input', () => update(Number(input.value), output), { signal: lifetime.signal });
-      update(Number(input.value), output);
+    function applyPhotography(patch: Partial<PhotographySettings>) {
+      model.setPhotography(patch);
+      if (patch.focal !== undefined) camera.setFocalLength(patch.focal);
+      if (patch.exposure !== undefined) renderer.toneMappingExposure = patch.exposure;
+      if (patch.dof !== undefined) runtime.setDepthOfField(patch.dof);
+      if (patch.autoOrbit !== undefined) { controls.autoRotate = patch.autoOrbit; controls.autoRotateSpeed = 0.6; }
+      if (patch.removeShadows !== undefined) updateShadows();
+      if (patch.showRigs !== undefined) updateRigVisibility();
+      if (patch.lights) for (const [id, light] of Object.entries(patch.lights)) updateLight(id, light);
     }
 
-    function updateLightFromControl(event: Event) {
-      const article = event.target instanceof Element ? event.target.closest<HTMLElement>('.light-control') : null;
-      if (!article?.dataset.light) return;
-      const rig = lights[article.dataset.light];
-      const enabled = element<HTMLInputElement>('.light-enabled', article).checked;
-      const intensity = Number(element<HTMLInputElement>('.light-intensity', article).value);
-      const color = element<HTMLInputElement>('.light-color', article).value;
-      const x = Number(element<HTMLInputElement>('.light-position', article).value);
-      const height = Number(element<HTMLInputElement>('.light-height', article).value);
-      const depth = Number(element<HTMLInputElement>('.light-depth', article).value);
+    function updateLight(id: string, { enabled, intensity, color, position, height, depth }: LightSettings) {
+      const rig = lights[id];
       rig.enabled = enabled;
       rig.light.intensity = enabled ? intensity * 8 : 0;
       rig.light.color.set(color);
       rig.glowMaterial.color.set(enabled ? color : '#222222');
-      element<HTMLOutputElement>('.light-output', article).value = intensity.toFixed(1);
-      rig.light.position.set(x, height, depth);
-      rig.stand.position.set(x, height / 2, depth);
+      rig.light.position.set(position, height, depth);
+      rig.stand.position.set(position, height / 2, depth);
       rig.stand.scale.y = height / 3.1;
       rig.fixture.position.copy(rig.light.position);
       rig.panel.position.copy(rig.light.position);
@@ -545,108 +357,60 @@ try {
       rig.panel.translateZ(0.071);
     }
 
-    function setActiveButton(button: HTMLElement) {
-      button.parentElement?.querySelectorAll('.is-active').forEach((active) => active.classList.remove('is-active'));
-      button.classList.add('is-active');
-    }
-
     function resizeViewport() {
-      if (lifetime.signal.aborted || capture.isRecording) return;
-      const width = Math.max(1, viewport.clientWidth);
-      const height = Math.max(1, viewport.clientHeight);
-      camera.aspect = width / height;
-      camera.updateProjectionMatrix();
-      renderer.setSize(width, height, false);
-      composer.setSize(width, height);
-      bokehUniforms.aspect.value = camera.aspect;
-      element<HTMLElement>('#resolution-readout').textContent = `${Math.round(width * renderer.getPixelRatio())} × ${Math.round(height * renderer.getPixelRatio())}`;
-    }
-
-    function render(time: number) {
       if (lifetime.signal.aborted) return;
-      const delta = previousFrameTime ? Math.min((time - previousFrameTime) / 1000, 0.1) : 1 / 60;
-      previousFrameTime = time;
-      if (controls.enabled) controls.update(delta);
-      const requiredFar = Math.max(100, camera.position.length() + controls.target.length() + 100);
-      if (camera.far < requiredFar || camera.far > requiredFar * 4) {
-        camera.far = requiredFar * 2;
-        camera.updateProjectionMatrix();
-      }
-      star.update(delta);
-      bokehUniforms.focus.value = camera.position.distanceTo(controls.target);
-      composer.render();
+      runtime.resize();
     }
 
     function captureState(): ProjectState {
       return {
+        ...model.getSnapshot().photography,
         props: props.capture(),
         pose: currentPose,
         poseSaveTarget,
         backdrop: `#${studio.material.color.getHexString()}`,
-        aspect: currentAspect,
+        aspect: model.getSnapshot().stage.aspect,
         cameraPosition: camera.position.toArray(),
         target: controls.target.toArray(),
-        focal: element<HTMLInputElement>('#focal-length').value,
-        exposure: element<HTMLInputElement>('#exposure').value,
-        dof: element<HTMLInputElement>('#depth-of-field').value,
-        rotation: element<HTMLInputElement>('#star-rotation').value,
+        rotation: THREE.MathUtils.radToDeg(star.group.rotation.y),
         character: star.id,
         jointPose: star.capturePose(),
         poseCustomized,
         background: backgroundData,
-        autoOrbit: element<HTMLInputElement>('#auto-orbit').checked,
-        showRigs: element<HTMLInputElement>('#show-rigs').checked,
-        removeShadows: !renderer.shadowMap.enabled,
-        lights: Object.fromEntries([...document.querySelectorAll<HTMLElement>('.light-control')].map((article) => [article.dataset.light!, {
-          enabled: element<HTMLInputElement>('.light-enabled', article).checked,
-          intensity: element<HTMLInputElement>('.light-intensity', article).value,
-          color: element<HTMLInputElement>('.light-color', article).value,
-          position: element<HTMLInputElement>('.light-position', article).value,
-          height: element<HTMLInputElement>('.light-height', article).value,
-          depth: element<HTMLInputElement>('.light-depth', article).value,
-        }])),
       };
     }
 
     function rememberState() {
-      if (lifetime.signal.aborted || isRestoringState) return;
-      scheduleConfiguration();
-      const state = JSON.stringify(captureState());
-      if (history.at(-1) !== state) history.push(state);
-      if (history.length > 30) history.shift();
+      if (!lifetime.signal.aborted) project.remember();
     }
 
     async function undo() {
-      const state = history.pop();
-      if (!state) {
-        announce('没有可撤销的操作');
-        return;
+      try {
+        announce(await project.undo() ? '已撤销上一步' : '没有可撤销的操作');
+      } catch (error) {
+        announce(error instanceof Error ? error.message : String(error));
       }
-      if (await restoreState(JSON.parse(state))) announce('已撤销上一步');
     }
 
-    async function restoreState(state: ProjectState) {
+    function restoreState(state: ProjectState) {
+      return project.restore(state);
+    }
+
+    async function applyProjectState(state: ProjectState) {
       if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) return false;
       if (lifetime.signal.aborted) return false;
-      isRestoringState = true;
       props.restore(state.props ?? []);
       const knownPose = Object.hasOwn(poses, state.pose);
       applyPose(knownPose ? state.pose : poseLibrary.defaultPose);
       studio.material.color.set(state.backdrop);
-      document.querySelectorAll<HTMLElement>('[data-color]').forEach((button) => button.classList.toggle('is-active', button.dataset.color?.toLowerCase() === state.backdrop.toLowerCase()));
-      document.documentElement.style.setProperty('--frame-aspect', String(state.aspect));
-      currentAspect = Number(state.aspect);
-      document.querySelectorAll<HTMLElement>('[data-aspect]').forEach((button) => button.classList.toggle('is-active', button.dataset.aspect === String(state.aspect)));
+      model.setStage({ backdrop: state.backdrop, aspect: Number(state.aspect) });
       camera.position.fromArray(state.cameraPosition);
       controls.target.fromArray(state.target);
-      setRangeValue('#focal-length', state.focal);
-      setRangeValue('#exposure', state.exposure);
-      setRangeValue('#depth-of-field', state.dof);
-      setRangeValue('#star-rotation', state.rotation ?? 0);
+      applyPhotography({ focal: Number(state.focal), exposure: Number(state.exposure), dof: Number(state.dof),
+        autoOrbit: state.autoOrbit ?? false, showRigs: state.showRigs ?? false, removeShadows: state.removeShadows ?? true });
+      star.group.rotation.y = THREE.MathUtils.degToRad(Number(state.rotation ?? 0));
       if (state.jointPose) {
-        setRangeValue('#star-rotation', THREE.MathUtils.radToDeg(state.jointPose.rotation));
         star.restorePose(state.jointPose);
-        element<HTMLOutputElement>('#rotation-output').value = `${THREE.MathUtils.radToDeg(state.jointPose.rotation).toFixed(1)}°`;
       } else {
         star.setGrounded(true);
         for (const side of ['left', 'right'] as const) {
@@ -660,36 +424,20 @@ try {
       if (state.poseCustomized || !knownPose) onJointChange(star.selected);
       else syncJointControls();
       syncPlacementControls();
-      element<HTMLInputElement>('#auto-orbit').checked = state.autoOrbit ?? false;
-      controls.autoRotate = state.autoOrbit ?? false;
-      controls.autoRotateSpeed = 0.6;
-      element<HTMLInputElement>('#show-rigs').checked = state.showRigs ?? false;
-      updateRigVisibility();
-      element<HTMLInputElement>('#remove-shadows').checked = state.removeShadows ?? true;
-      updateShadows();
       setBackground(state.background ?? null);
+      const restoredLights = { ...model.getSnapshot().photography.lights };
       Object.entries(state.lights).forEach(([id, lightState]) => {
-        const article = element<HTMLElement>(`[data-light="${id}"]`);
-        element<HTMLInputElement>('.light-enabled', article).checked = lightState.enabled;
-        element<HTMLInputElement>('.light-intensity', article).value = String(lightState.intensity);
-        element<HTMLInputElement>('.light-color', article).value = lightState.color;
-        element<HTMLInputElement>('.light-position', article).value = String(lightState.position);
         const definition = lightDefinitions.find((light) => light.id === id);
         if (!definition) throw new Error('未知灯光配置');
-        element<HTMLInputElement>('.light-height', article).value = String(lightState.height ?? definition.position[1]);
-        element<HTMLInputElement>('.light-depth', article).value = String(lightState.depth ?? definition.position[2]);
-        element<HTMLInputElement>('.light-intensity', article).dispatchEvent(new Event('input', { bubbles: true }));
+        restoredLights[definition.id] = {
+          enabled: lightState.enabled, color: lightState.color, intensity: Number(lightState.intensity),
+          position: Number(lightState.position), height: Number(lightState.height ?? definition.position[1]),
+          depth: Number(lightState.depth ?? definition.position[2]),
+        };
       });
+      applyPhotography({ lights: restoredLights });
       lifetime.frame(resizeViewport);
-      isRestoringState = false;
-      scheduleConfiguration();
       return true;
-    }
-
-    function setRangeValue(selector: string, value: NumericInput) {
-      const input = element<HTMLInputElement>(selector);
-      input.value = String(value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     async function resetStudio() {
@@ -700,11 +448,11 @@ try {
 
     function announce(message: string) {
       if (lifetime.signal.aborted) return;
-      statusMessage.textContent = message;
+      model.setStatus(message);
     }
 
     function updateShadows() {
-      renderer.shadowMap.enabled = !element<HTMLInputElement>('#remove-shadows').checked;
+      renderer.shadowMap.enabled = !model.getSnapshot().photography.removeShadows;
       renderer.shadowMap.needsUpdate = true;
       scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
@@ -714,7 +462,7 @@ try {
     }
 
     function updateRigVisibility() {
-      const visible = element<HTMLInputElement>('#show-rigs').checked;
+      const visible = model.getSnapshot().photography.showRigs;
       Object.values(lights).forEach((rig) => {
         rig.stand.visible = visible;
         rig.fixture.visible = visible;
@@ -730,7 +478,7 @@ try {
       studio.photoBackdrop.material.map?.dispose();
       studio.photoBackdrop.material.map = null;
       studio.photoBackdrop.material.needsUpdate = true;
-      if (!data) return;
+      if (!data) { scheduleConfiguration(); return; }
       try {
         const texture = await new THREE.TextureLoader().loadAsync(data);
         if (lifetime.signal.aborted || version !== backgroundLoadVersion) { texture.dispose(); return; }
@@ -741,18 +489,15 @@ try {
         studio.photoBackdrop.material.map = texture;
         studio.photoBackdrop.material.needsUpdate = true;
         studio.photoBackdrop.visible = true;
+        scheduleConfiguration();
       } catch (error) {
-        if (version === backgroundLoadVersion) backgroundData = null;
+        if (version === backgroundLoadVersion) { backgroundData = null; scheduleConfiguration(); }
         console.error(error);
         announce('背景图片无法解码，请选择 PNG、JPEG 或 WebP');
       }
     }
 
-    async function importBackground(event: Event) {
-      if (!(event.target instanceof HTMLInputElement)) return;
-      const file = event.target.files?.[0];
-      event.target.value = '';
-      if (!file) return;
+    async function importBackground(file: File) {
       if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 8 * 1024 * 1024) {
         announce('请选择 8 MB 以内的 PNG、JPEG 或 WebP');
         return;
@@ -773,11 +518,7 @@ try {
       announce('项目配置已导出，包含背景图片与摄影参数');
     }
 
-    async function loadProject(event: Event) {
-      if (!(event.target instanceof HTMLInputElement)) return;
-      const file = event.target.files?.[0];
-      event.target.value = '';
-      if (!file) return;
+    async function loadProject(file: File) {
       try {
         if (file.size > 13 * 1024 * 1024) throw new Error('Project too large');
         const project = JSON.parse(await file.text());
@@ -791,58 +532,16 @@ try {
       }
     }
 
-    function buildJointControls() {
-      const select = element<HTMLSelectElement>('#joint-select');
-      select.replaceChildren();
-      for (const [id, , label] of JOINTS) {
-        const option = document.createElement('option');
-        option.value = id;
-        option.textContent = label;
-        select.append(option);
-      }
-      select.value = star.selected;
-      ['x', 'y', 'z'].forEach((axis, index) => {
-        for (const suffix of ['', '-value']) {
-          const input = element<HTMLInputElement>(`#joint-${axis}${suffix}`);
-          input.addEventListener('pointerdown', rememberState, { signal: lifetime.signal });
-          input.addEventListener('focus', rememberState, { signal: lifetime.signal });
-          input.addEventListener('input', () => {
-            if (input.value === '' || !Number.isFinite(Number(input.value))) return;
-            const angles: Vector3Tuple = [...star.poseAngles[star.selected]];
-            angles[index] = THREE.MathUtils.degToRad(THREE.MathUtils.clamp(Number(input.value), -180, 180));
-            star.setJoint(star.selected, angles);
-            onJointChange(star.selected);
-          }, { signal: lifetime.signal });
-        }
-      });
-    }
-
     function syncPlacementControls() {
-      element<HTMLInputElement>('#auto-ground').checked = star.grounded;
-      for (const selector of ['#character-height', '#character-height-value']) {
-        const input = element<HTMLInputElement>(selector);
-        input.value = String(Number(star.height.toFixed(3)));
-        input.disabled = star.grounded;
-      }
+      model.setCharacter({ grounded: star.grounded, height: Number(star.height.toFixed(3)), rotation: Number(THREE.MathUtils.radToDeg(star.group.rotation.y).toFixed(1)) });
     }
 
     function syncJointControls() {
-      const select = element<HTMLSelectElement>('#joint-select');
-      if (!select) return;
-      for (const option of select.options) {
-        option.disabled = !star.isJointSelectable(option.value);
-        option.hidden = false;
-      }
-      element<HTMLButtonElement>('#joint-reset').disabled = !star.joints[star.selected];
-      select.value = star.selected;
       const angles = star.poseAngles[star.selected] ?? [0, 0, 0];
-      ['x', 'y', 'z'].forEach((axis, index) => {
-        const value = Number(THREE.MathUtils.radToDeg(angles[index]).toFixed(1));
-        element<HTMLInputElement>(`#joint-${axis}`).value = String(value);
-        element<HTMLInputElement>(`#joint-${axis}-value`).value = String(value);
-        element<HTMLInputElement>(`#joint-${axis}`).disabled = !star.joints[star.selected];
-        element<HTMLInputElement>(`#joint-${axis}-value`).disabled = !star.joints[star.selected];
-      });
+      syncPlacementControls();
+      model.setCharacter({ id: star.id, selected: star.selected, editing: star.editing,
+        jointAvailable: !!star.joints[star.selected], selectable: JOINTS.filter(([id]) => star.isJointSelectable(id)).map(([id]) => id),
+        angles: angles.map(angle => Number(THREE.MathUtils.radToDeg(angle).toFixed(1))) as Vector3Tuple });
     }
 
     function onJointChange(id: string, edited = true) {
@@ -853,6 +552,7 @@ try {
         if (entry) poseBrowser.setCaption(`${entry.name} · 未保存`);
       }
       syncJointControls();
+      if (edited) scheduleConfiguration();
     }
 
     async function switchCharacter(id: string, recordHistory = true) {
@@ -861,33 +561,29 @@ try {
       if (star.vrm && star.id === id) return true;
       if (recordHistory) rememberState();
       modelLoading = true;
-      element<HTMLElement>('#character-controls').setAttribute('aria-busy', 'true');
-      element<HTMLElement>('#model-credit').textContent = '正在加载人偶…';
-      const actions = ['#save-button', '#load-button', '#undo-button', '#reset-button', '#photo-button', '#record-button', '#pose-save', '#pose-save-as', '#shot-apply'];
-      actions.forEach((selector) => { element<HTMLButtonElement>(selector).disabled = true; });
+      model.setAvailability({ busy: true });
+      model.setCharacter({ credit: '正在加载人偶…' });
+      poseSaving.update();
+      props.refresh();
       try {
         await star.load(id);
         if (lifetime.signal.aborted) return false;
-        for (const option of element<HTMLSelectElement>('#joint-select').options) option.disabled = !star.joints[option.value];
-        document.querySelectorAll<HTMLElement>('[data-character]').forEach((button) => {
-          button.classList.toggle('is-active', button.dataset.character === id);
-          button.setAttribute('aria-pressed', String(button.dataset.character === id));
-        });
-        element<HTMLElement>('#model-credit').textContent = CHARACTERS[id].credit;
+        model.setCharacter({ credit: CHARACTERS[id].credit });
         syncJointControls();
         announce(`${CHARACTERS[id].name} · ${Object.keys(star.joints).length} 个可编辑关节`);
         return true;
       } catch (error) {
         if (lifetime.signal.aborted) return false;
-        element<HTMLElement>('#model-credit').textContent = star.vrm ? CHARACTERS[star.id].credit : '人偶加载失败';
+        model.setCharacter({ credit: star.vrm ? CHARACTERS[star.id].credit : '人偶加载失败' });
         announce(`人偶加载失败：${error instanceof Error ? error.message : String(error)}`);
         return false;
       } finally {
         modelLoading = false;
         if (!lifetime.signal.aborted) {
-          element<HTMLElement>('#character-controls').setAttribute('aria-busy', 'false');
-          actions.forEach((selector) => { element<HTMLButtonElement>(selector).disabled = false; });
+          model.setAvailability({ busy: project.getSnapshot().restoring });
           poseSaving.update();
+          props.refresh();
+          if (recordHistory) scheduleConfiguration();
         }
       }
     }
@@ -902,11 +598,7 @@ try {
       lifetime.timeout(() => lifetime.releaseUrl(url), 1000);
     }
 
-    async function importPose(event: Event) {
-      if (!(event.target instanceof HTMLInputElement)) return;
-      const file = event.target.files?.[0];
-      event.target.value = '';
-      if (!file) return;
+    async function importPose(file: File) {
       try {
         if (file.size > 128 * 1024) throw new Error('姿势文件超过 128 KB');
         const pose = JSON.parse(await file.text());
@@ -914,7 +606,6 @@ try {
         if (!validPose(pose)) throw new Error('请选择有效的 studio-pose JSON 文件');
         rememberState();
         star.restorePose(pose);
-        setRangeValue('#star-rotation', THREE.MathUtils.radToDeg(pose.rotation));
         syncPlacementControls();
         poseSaveTarget = null;
         poseSaving.update();
@@ -925,24 +616,6 @@ try {
       }
     }
 
-    function disposeScene() {
-      const geometries = new Set<THREE.BufferGeometry>();
-      const materials = new Set<THREE.Material>();
-      const textures = new Set<THREE.Texture>();
-      scene.traverse(object => {
-        if (object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points) {
-          geometries.add(object.geometry);
-          for (const material of Array.isArray(object.material) ? object.material : [object.material]) materials.add(material);
-        }
-        if (object instanceof THREE.SpotLight || object instanceof THREE.DirectionalLight || object instanceof THREE.PointLight) object.shadow.dispose();
-      });
-      for (const material of materials) for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
-      textures.forEach(texture => texture.dispose());
-      materials.forEach(material => material.dispose());
-      geometries.forEach(geometry => geometry.dispose());
-      scene.clear();
-      scene.environment = null;
-    }
 } catch (error) {
   lifetime.dispose();
   throw error;

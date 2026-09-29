@@ -15,7 +15,8 @@ from unittest.mock import patch, MagicMock
 
 from PIL import Image
 import requests
-import server
+import ai_service
+import studio_app as server
 import auth
 from cachelib import FileSystemCache
 import msal
@@ -231,7 +232,7 @@ class ImageEditTests(unittest.TestCase):
 
     def test_single_image_and_reference_order(self):
         for reference in (None, self.image):
-            with self.subTest(reference=bool(reference)), patch('server.requests.post', return_value=self.azure_response()) as upstream:
+            with self.subTest(reference=bool(reference)), patch('ai_service.requests.post', return_value=self.azure_response()) as upstream:
                 payload = {**self.payload, 'reference': reference}
                 result = server.edit_image(payload, self.config)
                 self.assertEqual(result['image'], self.image)
@@ -261,7 +262,7 @@ class ImageEditTests(unittest.TestCase):
 
     def test_analysis_uses_configured_vision_and_returns_valid_scene(self):
         payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
-        with patch('server.requests.post', return_value=self.analysis_response()) as upstream:
+        with patch('ai_service.requests.post', return_value=self.analysis_response()) as upstream:
             result = server.analyze_image(payload, {**self.config, 'deployment': 'vision-deployment'})
         self.assertEqual(result['scene'], {**self.analysis_result()['scene'], 'backdrop': '#eef2f4'})
         self.assertTrue(result['id'].startswith('shot-'))
@@ -291,7 +292,7 @@ class ImageEditTests(unittest.TestCase):
         response['scene']['jointPose']['joints'].update({
             'leftLowerArm': 1.2, 'rightLowerArm': 0.8, 'leftLowerLeg': 0.4, 'rightLowerLeg': 0.6,
         })
-        with patch('server.requests.post', return_value=self.analysis_response(response)):
+        with patch('ai_service.requests.post', return_value=self.analysis_response(response)):
             result = server.analyze_image(payload, self.config)
         joints = result['scene']['jointPose']['joints']
         self.assertEqual(joints['leftLowerArm'], [0, -1.2, 0])
@@ -302,43 +303,43 @@ class ImageEditTests(unittest.TestCase):
         self.assertEqual(response['scene']['jointPose']['joints']['leftLowerArm'], 1.2)
         for bend in (-0.1, 2.66, True, [0, 1, 0]):
             response['scene']['jointPose']['joints']['leftLowerArm'] = bend
-            with patch('server.requests.post', return_value=self.analysis_response(response)), self.assertRaises(server.EditError) as raised:
+            with patch('ai_service.requests.post', return_value=self.analysis_response(response)), self.assertRaises(server.EditError) as raised:
                 server.analyze_image(payload, self.config)
             self.assertEqual(raised.exception.code, 'invalid_result')
 
     def test_analysis_rejects_multiple_people_invalid_data_and_missing_consent(self):
         payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
         for count in (0, 2, 5):
-            with patch('server.requests.post', return_value=self.analysis_response({'personCount': count})), self.assertRaises(server.EditError) as raised:
+            with patch('ai_service.requests.post', return_value=self.analysis_response({'personCount': count})), self.assertRaises(server.EditError) as raised:
                 server.analyze_image(payload, self.config)
             self.assertEqual(raised.exception.code, 'single_person_required')
         invalid = self.analysis_result()
         invalid['scene']['cameraPosition'] = invalid['scene']['target']
-        with patch('server.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
+        with patch('ai_service.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
             server.analyze_image(payload, self.config)
         self.assertEqual(raised.exception.code, 'invalid_result')
         invalid = self.analysis_result()
         invalid['scene']['aspect'] = '0.666667'
-        with patch('server.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
+        with patch('ai_service.requests.post', return_value=self.analysis_response(invalid)), self.assertRaises(server.EditError) as raised:
             server.analyze_image(payload, self.config)
         self.assertEqual(raised.exception.code, 'invalid_result')
-        with patch('server.requests.post') as upstream:
+        with patch('ai_service.requests.post') as upstream:
             for bad in ({**payload, 'consent': False}, {**payload, 'image': 'https://example.com/photo.png'}):
                 with self.assertRaises(server.EditError):
                     server.analyze_image(bad, self.config)
             upstream.assert_not_called()
 
     def test_analysis_configuration_status_and_protected_route(self):
-        with patch('server.dotenv_values', return_value={'AZURE_OPENAI_VISION_DEPLOYMENT': 'vision-model'}), patch.dict('server.os.environ', {}, clear=True), patch('server.configuration', return_value=self.config):
+        with patch('ai_service.dotenv_values', return_value={'AZURE_OPENAI_VISION_DEPLOYMENT': 'vision-model'}), patch.dict('ai_service.os.environ', {}, clear=True), patch('ai_service.configuration', return_value=self.config):
             config = server.vision_configuration()
         self.assertEqual(config['deployment'], 'vision-model')
         self.assertEqual(config['version'], '2024-10-21')
-        with patch('server.vision_configuration', return_value=config):
+        with patch('studio_app.vision_configuration', return_value=config):
             status = self.client.get('/api/ai/analyze/status', base_url=self.origin)
             self.assertEqual(set(status.json), {'configured', 'deployment', 'token'})
             self.assertNotIn('test-secret', status.text)
             self.assertEqual(self.client.post('/api/ai/analyze', base_url=self.origin, json={}).status_code, 403)
-            with patch('server.requests.post', return_value=self.analysis_response()):
+            with patch('ai_service.requests.post', return_value=self.analysis_response()):
                 response = self.client.post('/api/ai/analyze', base_url=self.origin,
                                             json={'image': self.image, 'sourceName': 'reference.png', 'consent': True},
                                             headers={'X-Studio-Token': server.TOKEN})
@@ -347,11 +348,11 @@ class ImageEditTests(unittest.TestCase):
     def test_analysis_errors_never_leak_keys_and_do_not_retry(self):
         payload = {'image': self.image, 'sourceName': 'reference.png', 'consent': True}
         for error, expected in ((requests.Timeout('test-secret'), 'azure_timeout'), (requests.ConnectionError('test-secret'), 'azure_network')):
-            with patch('server.requests.post', side_effect=error) as upstream, self.assertRaises(server.EditError) as raised:
+            with patch('ai_service.requests.post', side_effect=error) as upstream, self.assertRaises(server.EditError) as raised:
                 server.analyze_image(payload, self.config)
             self.assertEqual(raised.exception.code, expected)
             self.assertEqual(upstream.call_count, 1)
-        with patch('server.requests.post') as upstream, self.assertRaises(server.EditError) as raised:
+        with patch('ai_service.requests.post') as upstream, self.assertRaises(server.EditError) as raised:
             server.analyze_image(payload, {**self.config, 'configured': False})
         self.assertEqual(raised.exception.code, 'vision_not_configured')
         upstream.assert_not_called()
@@ -378,7 +379,7 @@ class ImageEditTests(unittest.TestCase):
                    {**self.payload, 'garment': ''}, {**self.payload, 'garment': 123},
                    {**self.payload, 'garment': self.image.replace('image/png', 'image/jpeg')},
                    {**self.payload, 'quality': 'invalid'}, {**self.payload, 'size': '999999x999999'}]
-        with patch('server.requests.post') as upstream:
+        with patch('ai_service.requests.post') as upstream:
             for payload in invalid:
                 with self.subTest(payload=type(payload).__name__), self.assertRaises(server.EditError):
                     server.edit_image(payload, self.config)
@@ -389,7 +390,7 @@ class ImageEditTests(unittest.TestCase):
         Image.new('RGB', (32, 32), 'blue').save(garment_bytes, format='PNG')
         garment = 'data:image/png;base64,' + base64.b64encode(garment_bytes.getvalue()).decode()
         for with_person in (False, True):
-            with self.subTest(with_person=with_person), patch('server.requests.post', return_value=self.azure_response()) as upstream:
+            with self.subTest(with_person=with_person), patch('ai_service.requests.post', return_value=self.azure_response()) as upstream:
                 payload = {**self.payload, 'garment': garment}
                 if with_person:
                     payload['reference'] = self.image
@@ -408,14 +409,14 @@ class ImageEditTests(unittest.TestCase):
 
     def test_three_maximum_size_images_and_oversized_garment(self):
         raw = base64.b64decode(self.encoded)
-        padded = raw + bytes(server.MAX_IMAGE_BYTES - len(raw))
+        padded = raw + bytes(ai_service.MAX_IMAGE_BYTES - len(raw))
         image = 'data:image/png;base64,' + base64.b64encode(padded).decode()
-        with patch('server.configuration', return_value=self.config), patch('server.requests.post', return_value=self.azure_response()) as upstream:
+        with patch('studio_app.configuration', return_value=self.config), patch('ai_service.requests.post', return_value=self.azure_response()) as upstream:
             response = self.post({**self.payload, 'image': image, 'reference': image, 'garment': image})
             self.assertEqual(response.status_code, 200)
             self.assertEqual(len(upstream.call_args.kwargs['files']), 3)
         oversized = 'data:image/png;base64,' + base64.b64encode(padded + b'!').decode()
-        with patch('server.requests.post') as upstream:
+        with patch('ai_service.requests.post') as upstream:
             with self.assertRaises(server.EditError) as raised:
                 server.edit_image({**self.payload, 'garment': oversized}, self.config)
             self.assertEqual(raised.exception.code, 'invalid_image')
@@ -477,12 +478,12 @@ class ImageEditTests(unittest.TestCase):
         self.assertEqual(self.data_request('settings/retouch', {'value': {'token': 'secret'}, 'revision': 1}).status_code, 400)
 
     def test_generated_history_survives_without_browser_and_storage_failure_keeps_image(self):
-        with patch('server.configuration', return_value=self.config), patch('server.requests.post', return_value=self.azure_response()):
+        with patch('studio_app.configuration', return_value=self.config), patch('ai_service.requests.post', return_value=self.azure_response()):
             response = self.post()
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json['asset']['kind'], 'result')
             self.assertEqual(server.local_store().list('result')['items'][0]['metadata']['prompt'], self.payload['prompt'])
-            with patch('server.StudioStore.add', side_effect=server.StorageError()):
+            with patch('studio_app.StudioStore.add', side_effect=server.StorageError()):
                 failed_save = self.post()
             self.assertEqual(failed_save.status_code, 200)
             self.assertEqual(failed_save.json['image'], self.image)
@@ -495,7 +496,7 @@ class ImageEditTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/ai/status', base_url='http://other.example').status_code, 403)
 
     def test_status_never_exposes_credentials(self):
-        with patch('server.configuration', return_value=self.config):
+        with patch('studio_app.configuration', return_value=self.config):
             response = self.client.get('/api/ai/status', base_url=self.origin)
         self.assertEqual(set(response.json), {'configured', 'deployment', 'token'})
         self.assertNotIn('test-secret', response.text)
@@ -530,23 +531,23 @@ class ImageEditTests(unittest.TestCase):
 
     def test_azure_errors_are_sanitized(self):
         for status in (400, 401, 403, 404, 429, 500, 302):
-            with patch('server.configuration', return_value=self.config), patch('server.requests.post', return_value=self.azure_response(status)):
+            with patch('studio_app.configuration', return_value=self.config), patch('ai_service.requests.post', return_value=self.azure_response(status)):
                 response = self.post()
                 self.assertEqual(response.status_code, 502)
                 self.assertNotIn('test-secret', response.text)
 
     def test_timeout_and_invalid_output(self):
-        with patch('server.requests.post', side_effect=requests.Timeout('test-secret')):
+        with patch('ai_service.requests.post', side_effect=requests.Timeout('test-secret')):
             with self.assertRaises(server.EditError) as raised:
                 server.edit_image(self.payload, self.config)
             self.assertEqual(raised.exception.code, 'azure_timeout')
-        with patch('server.requests.post', return_value=self.azure_response(data={'data': []})):
+        with patch('ai_service.requests.post', return_value=self.azure_response(data={'data': []})):
             with self.assertRaises(server.EditError) as raised:
                 server.edit_image(self.payload, self.config)
             self.assertEqual(raised.exception.code, 'invalid_result')
 
     def test_missing_configuration_and_concurrent_request(self):
-        with patch('server.configuration', return_value={**self.config, 'configured': False}):
+        with patch('studio_app.configuration', return_value={**self.config, 'configured': False}):
             self.assertEqual(self.post().json['error'], 'not_configured')
         server.EDIT_LOCK.acquire()
         try:
@@ -618,7 +619,7 @@ class ImageEditTests(unittest.TestCase):
                     self.assertEqual(compiled.status_code, 200)
 
     def test_dotenv_and_environment_precedence(self):
-        with patch('server.dotenv_values', return_value={'AZURE_OPENAI_ENDPOINT': self.config['endpoint'], 'AZURE_OPENAI_API_KEY': 'file-key'}), patch.dict(server.os.environ, {}, clear=True):
+        with patch('ai_service.dotenv_values', return_value={'AZURE_OPENAI_ENDPOINT': self.config['endpoint'], 'AZURE_OPENAI_API_KEY': 'file-key'}), patch.dict(server.os.environ, {}, clear=True):
             self.assertTrue(server.configuration()['configured'])
             with patch.dict(server.os.environ, {'AZURE_OPENAI_API_KEY': 'env-key'}):
                 self.assertEqual(server.configuration()['key'], 'env-key')

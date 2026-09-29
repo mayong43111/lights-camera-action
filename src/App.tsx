@@ -7,8 +7,13 @@ import { Topbar } from './layout/StudioHeader';
 import { StudioLayout } from './layout/StudioLayout';
 import { initializeAuth } from './auth-client';
 import { studioTheme } from './components/StudioControls';
+import { createStudioModel } from './studio-model';
+import { StudioContext } from './studio-context';
+import { createViewHost, StudioViews } from './react-view';
 
 export function App() {
+  const [model] = useState(createStudioModel);
+  const [views] = useState(createViewHost);
   const [error, setError] = useState<string>();
   useEffect(() => {
     let mounted = true;
@@ -16,11 +21,12 @@ export function App() {
     window.lucide = { createIcons: () => createIcons({ icons }) };
     async function start() {
       try {
-        await initializeAuth(controller.signal);
+        const identity = await initializeAuth(controller.signal);
         controller.signal.throwIfAborted();
+        model.setAccount(identity.enabled ? identity.user?.name ?? null : null);
         const { createStudioController } = await import('./studio-controller');
         controller.signal.throwIfAborted();
-        await createStudioController(controller.signal);
+        await createStudioController(controller.signal, model, views);
       } catch (reason) {
         if (!mounted || controller.signal.aborted) return;
         controller.abort();
@@ -30,8 +36,8 @@ export function App() {
     }
     void start();
     return () => { mounted = false; queueMicrotask(() => controller.abort()); };
-  }, []);
-  return <ConfigProvider locale={zhCN} theme={studioTheme}>
+  }, [model, views]);
+  return <StudioContext.Provider value={model}><ConfigProvider locale={zhCN} theme={studioTheme}>
     <div className="app-shell">
       <Topbar />
       {error && <Alert className="startup-error" type="error" showIcon message="摄影棚未就绪" description={error}
@@ -39,5 +45,6 @@ export function App() {
       <StudioLayout />
     </div>
     <AssetDialogs />
-  </ConfigProvider>;
+    <StudioViews host={views} />
+  </ConfigProvider></StudioContext.Provider>;
 }

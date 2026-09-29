@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import type { StudioProject } from '../src/scene-types';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/ai/edit', route => route.abort());
@@ -18,6 +19,239 @@ test.skip('existing frontend contracts', async ({ page }) => {
   expect(result.passed).toBeGreaterThanOrEqual(43);
 });
 
+test('project session tracks edits, undo and pending saves without navigation writes', async ({ page }) => {
+  const writes: StudioProject[] = [];
+  let stored: StudioProject | null = null;
+  let revision = 0;
+  let holdNextSave = false;
+  let rejectNextSave = false;
+  let releaseSave: (() => void) | undefined;
+  await page.route('**/api/data/settings/scene', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { value: stored, revision } });
+    const body: { value: StudioProject; revision: number } = route.request().postDataJSON();
+    writes.push(body.value);
+    if (holdNextSave) {
+      holdNextSave = false;
+      await new Promise<void>(resolve => { releaseSave = resolve; });
+    }
+    if (rejectNextSave) {
+      rejectNextSave = false;
+      return route.fulfill({ status: 503, json: { error: 'storage_failed' } });
+    }
+    if (body.revision !== revision) return route.fulfill({ status: 409, json: { error: 'settings_conflict' } });
+    stored = body.value;
+    return route.fulfill({ json: { revision: ++revision } });
+  });
+  try {
+    await page.reload();
+    await expect(page.locator('#config-save')).toBeEnabled();
+    await page.clock.install();
+    await page.locator('#tab-camera').click();
+    await page.locator('#tab-lights').click();
+    await page.clock.fastForward(1000);
+    expect(writes).toHaveLength(0);
+    await page.locator('#tab-camera').click();
+    const focal = page.locator('#focal-length [role="slider"]');
+    const slider = focal;
+    const original = Number(await focal.getAttribute('aria-valuenow'));
+    await slider.press('ArrowRight');
+    await page.clock.fastForward(1000);
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    expect(writes.at(-1)?.state.focal).not.toBe(original);
+    await page.locator('#undo-button').click();
+    await expect(focal).toHaveAttribute('aria-valuenow', String(original));
+    await focal.scrollIntoViewIfNeeded();
+    const handle = (await focal.boundingBox())!;
+    const track = (await page.locator('#focal-length .ant-slider').boundingBox())!;
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(track.x + track.width * 0.7, handle.y + handle.height / 2, { steps: 5 });
+    await page.mouse.up();
+    await expect(focal).not.toHaveAttribute('aria-valuenow', String(original));
+    await page.locator('#undo-button').click();
+    await expect(focal).toHaveAttribute('aria-valuenow', String(original));
+    await page.clock.fastForward(1000);
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    const beforePending = writes.length;
+    holdNextSave = true;
+    await slider.press('ArrowRight');
+    await page.clock.fastForward(1000);
+    await expect.poll(() => Boolean(releaseSave)).toBe(true);
+    await slider.press('ArrowRight');
+    const latest = Number(await focal.getAttribute('aria-valuenow'));
+    await page.clock.fastForward(1000);
+    expect(writes).toHaveLength(beforePending + 1);
+    expect(writes.at(-1)?.state.focal).not.toBe(latest);
+    releaseSave?.();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    expect(writes).toHaveLength(beforePending + 2);
+    expect(writes.at(-1)?.state.focal).toBe(latest);
+    rejectNextSave = true;
+    await slider.press('ArrowRight');
+    await page.clock.fastForward(1000);
+    await expect(page.locator('#persistence-status')).toHaveText('配置保存失败');
+    const beforeRetry = writes.length;
+    await page.clock.fastForward(2000);
+    expect(writes).toHaveLength(beforeRetry);
+    await page.locator('#config-save').click();
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    expect(writes).toHaveLength(beforeRetry + 1);
+    const beforeRestore = writes.length;
+    const restoredFocal = await focal.getAttribute('aria-valuenow');
+    await page.reload();
+    await expect(page.locator('#persistence-status')).toHaveText('已恢复本地配置');
+    await expect(focal).toHaveAttribute('aria-valuenow', restoredFocal!);
+    await page.clock.fastForward(1000);
+    expect(writes).toHaveLength(beforeRestore);
+  } finally { releaseSave?.(); }
+});
+
+test('character stage toolbar and recording use controlled state', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.addInitScript(() => {
+    class Recorder extends EventTarget {
+      state = 'inactive';
+      mimeType = 'video/webm';
+      constructor(stream: MediaStream) {
+        super();
+        Reflect.set(window, '__recordingTracks', stream.getTracks());
+      }
+      static isTypeSupported() { return true; }
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        queueMicrotask(() => {
+          this.dispatchEvent(new BlobEvent('dataavailable', { data: new Blob(['recording-state-fixture'], { type: this.mimeType }) }));
+          this.dispatchEvent(new Event('stop'));
+        });
+      }
+    }
+    Object.defineProperty(window, 'MediaRecorder', { value: Recorder, configurable: true });
+  });
+  await page.reload();
+  await expect(page.locator('#config-save')).toBeEnabled();
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.locator('#tab-poses').click();
+  await expect(page.locator('input[type="range"]')).toHaveCount(0);
+  await page.locator('#auto-ground').uncheck();
+  await page.locator('#character-height-value').fill('2');
+  await expect(page.locator('#character-height [role="slider"]')).toHaveAttribute('aria-valuenow', '2');
+  await page.locator('#joint-select').selectOption('head');
+  await page.locator('#joint-x-value').fill('17');
+  await expect(page.locator('#joint-x [role="slider"]')).toHaveAttribute('aria-valuenow', '17');
+  const rotation = page.locator('#star-rotation [role="slider"]');
+  const originalRotation = await rotation.getAttribute('aria-valuenow');
+  await rotation.press('ArrowRight');
+  await page.locator('#undo-button').click();
+  await expect(rotation).toHaveAttribute('aria-valuenow', originalRotation!);
+  const request = page.waitForRequest(request => request.url().endsWith('/api/data/settings/scene') && request.method() === 'POST');
+  await page.locator('#config-save').click();
+  const project: StudioProject = (await request).postDataJSON().value;
+  expect(project.state.jointPose?.placement).toMatchObject({ grounded: false, height: 2 });
+  expect(project.state.jointPose?.joints.head[0]).toBeCloseTo(17 * Math.PI / 180);
+  const pose = structuredClone(project.state.jointPose!);
+  pose.rotation = 0.5;
+  pose.placement = { grounded: false, height: 1.8 };
+  await page.locator('#pose-input').setInputFiles({ name: 'pose.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(pose)) });
+  await expect(page.locator('#rotation-output')).toHaveText('28.6°');
+  await expect(rotation).toHaveAttribute('aria-valuenow', '29');
+  await expect(page.locator('#character-height-value')).toHaveValue('1.8');
+  const poseExport = page.waitForEvent('download');
+  await page.locator('#pose-export').click();
+  expect((await poseExport).suggestedFilename()).toBe('studio-pose.json');
+  await page.locator('#tab-stage').click();
+  await page.locator('[data-color="#1f674f"]').click();
+  await expect(page.locator('[data-color="#1f674f"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('[data-aspect="1"]').click();
+  await expect(page.locator('[data-aspect="1"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#record-button').click();
+  await expect(page.locator('#record-button')).toHaveAttribute('aria-label', '停止录制');
+  await expect(page.locator('#photo-button')).toBeDisabled();
+  await expect(page.locator('#undo-button')).toBeDisabled();
+  await expect(page.locator('[data-aspect="1.5"]')).toBeDisabled();
+  await page.locator('#tab-props').click();
+  await expect(page.locator('#prop-add')).toBeDisabled();
+  const recording = page.waitForEvent('download');
+  await page.locator('#record-button').click();
+  expect((await recording).suggestedFilename()).toMatch(/\.webm$/);
+  await expect(page.locator('#prop-add')).toBeEnabled();
+  await expect(page.locator('#photo-button')).toBeEnabled();
+  await expect(page.locator('#recording-indicator')).toBeHidden();
+  await page.locator('#library-open').click();
+  await expect(page.locator('#library-dialog')).toBeVisible();
+  await page.locator('#library-close').click();
+  await page.locator('#tab-poses').click();
+  await page.locator('#edit-joints').check();
+  await page.evaluate(() => {
+    const fixture = document.createElement('canvas');
+    fixture.width = 1; fixture.height = 1;
+    const encoded = fixture.toDataURL();
+    Object.defineProperty(document.querySelector('#viewport canvas'), 'toDataURL', { value: () => encoded, configurable: true });
+  });
+  await page.locator('#photo-button').click();
+  await expect(page.locator('#status-message')).toHaveText('已存入拍摄相册');
+  await expect(page.locator('#edit-joints')).toBeChecked();
+  await page.locator('#record-button').click();
+  await expect(page.locator('#record-button')).toHaveAttribute('aria-label', '停止录制');
+  await page.evaluate(async () => {
+    const path = document.querySelector<HTMLScriptElement>('script[src*="/src/main.tsx"]')!.src;
+    const module = await import(path);
+    module.application.unmount();
+  });
+  await expect(page.locator('#viewport canvas')).toHaveCount(0);
+  expect(await page.evaluate(() => (Reflect.get(window, '__recordingTracks') as MediaStreamTrack[]).every(track => track.readyState === 'ended'))).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test('controlled photography and portal panels preserve project compatibility', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.locator('#tab-lights').click();
+  await expect(page.locator('#panel-lights input[type="range"]')).toHaveCount(0);
+  const intensity = page.getByRole('slider', { name: '主光亮度', exact: true });
+  const originalIntensity = await intensity.getAttribute('aria-valuenow');
+  await intensity.press('ArrowRight');
+  await expect(intensity).not.toHaveAttribute('aria-valuenow', originalIntensity!);
+  await page.locator('#undo-button').click();
+  await expect(intensity).toHaveAttribute('aria-valuenow', originalIntensity!);
+  const rigs = page.locator('#show-rigs');
+  const originalRigs = await rigs.isChecked();
+  await rigs.setChecked(!originalRigs);
+  await page.locator('#undo-button').click();
+  await expect(rigs).toBeChecked({ checked: originalRigs });
+  const shadows = page.locator('#remove-shadows');
+  const originalShadows = await shadows.isChecked();
+  await shadows.setChecked(!originalShadows);
+  await page.locator('#undo-button').click();
+  await expect(shadows).toBeChecked({ checked: originalShadows });
+  await page.locator('#tab-camera').click();
+  await expect(page.locator('#panel-camera input[type="range"]')).toHaveCount(0);
+  const focal = page.getByRole('slider', { name: '焦距', exact: true });
+  await focal.press('ArrowRight');
+  await expect(page.locator('#lens-readout')).toHaveText(`${await focal.getAttribute('aria-valuenow')} MM`);
+  const save = page.waitForRequest(request => request.url().endsWith('/api/data/settings/scene') && request.method() === 'POST');
+  await page.locator('#config-save').click();
+  const project: StudioProject = (await save).postDataJSON().value;
+  await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+  project.state.focal = '62';
+  project.state.exposure = '0.5';
+  project.state.dof = '20';
+  project.state.lights.key.intensity = '6.1';
+  await page.locator('#project-input').setInputFiles({ name: 'legacy-project.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)) });
+  await expect(focal).toHaveAttribute('aria-valuenow', '62');
+  await expect(page.locator('#aperture-readout')).toHaveText('f/4.8');
+  await page.locator('#tab-lights').click();
+  await expect(intensity).toHaveAttribute('aria-valuenow', '6.1');
+  await page.locator('#tab-poses').click();
+  await page.locator('#pose-save-as').click();
+  await expect(page.locator('#pose-save-name')).toBeVisible();
+  await page.locator('#pose-save-cancel').click();
+  await expect(page.locator('#pose-save-name')).toBeHidden();
+  await expect(page.locator('#viewport canvas')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
 test('runtime file writes preserve preset selection without applying or reloading', async ({ page }) => {
   const dataDirectory = resolve('.studio-data');
   await mkdir(dataDirectory, { recursive: true });
@@ -25,9 +259,10 @@ test('runtime file writes preserve preset selection without applying or reloadin
   const marker = resolve(directory, 'runtime.txt');
   try {
     await writeFile(marker, 'initial');
-    const originalFocal = await page.locator('#focal-length').inputValue();
+    const originalFocal = await page.locator('#focal-length [role="slider"]').getAttribute('aria-valuenow');
     const originalPose = await page.locator('#pose-state').textContent();
     const originalPreview = await page.locator('#shot-preview').getAttribute('src');
+    const originalPersistence = await page.locator('#persistence-status').textContent();
     const preset = page.getByRole('combobox', { name: '配置预设', exact: true });
     const dropdown = page.locator('.ant-select-dropdown:visible');
     await preset.fill('不存在的预设');
@@ -42,7 +277,7 @@ test('runtime file writes preserve preset selection without applying or reloadin
     await expect(preset).toHaveValue('');
     await expect(dropdown.locator('.ant-select-item-option').nth(1)).toBeVisible();
     await preset.press('Escape');
-    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    await expect(page.locator('#persistence-status')).toHaveText(originalPersistence!);
     const navigation = page.waitForEvent('framenavigated', {
       predicate: frame => frame === page.mainFrame(), timeout: 3000,
     }).then(() => true, error => {
@@ -53,7 +288,7 @@ test('runtime file writes preserve preset selection without applying or reloadin
     expect(await navigation).toBe(false);
     await expect(page.locator('#shot-select .ant-select-selection-item')).toHaveText(selection);
     await expect(page.locator('#shot-preview')).not.toHaveAttribute('src', originalPreview!);
-    await expect(page.locator('#focal-length')).toHaveValue(originalFocal);
+    await expect(page.locator('#focal-length [role="slider"]')).toHaveAttribute('aria-valuenow', originalFocal!);
     await expect(page.locator('#pose-state')).toHaveText(originalPose!);
     await expect(page.locator('.startup-error')).toHaveCount(0);
   } finally {
@@ -116,7 +351,7 @@ test('studio lifecycle releases resources and remounts once', async ({ page }) =
   page.on('pageerror', error => errors.push(error.message));
   const jointCount = await page.locator('#joint-select option').count();
   await page.evaluate(async () => {
-    const path = '/src/main.tsx';
+    const path = document.querySelector<HTMLScriptElement>('script[src*="/src/main.tsx"]')!.src;
     const module = await import(path);
     Reflect.set(window, '__previousCanvas', document.querySelector('#viewport canvas'));
     module.application.unmount();
@@ -126,7 +361,7 @@ test('studio lifecycle releases resources and remounts once', async ({ page }) =
   await expect.poll(() => page.evaluate(() => Reflect.get(window, '__previousCanvas').getContext('webgl2').isContextLost())).toBe(true);
   await page.evaluate(async () => {
     window.dispatchEvent(new Event('resize'));
-    const path = '/src/main.tsx';
+    const path = document.querySelector<HTMLScriptElement>('script[src*="/src/main.tsx"]')!.src;
     const module = await import(path);
     Reflect.set(window, '__remountedApplication', module.mountApplication(document.getElementById('root')));
   });
@@ -149,7 +384,7 @@ test('studio lifecycle releases resources and remounts once', async ({ page }) =
   });
   try {
     await page.evaluate(async () => {
-      const path = '/src/main.tsx';
+      const path = document.querySelector<HTMLScriptElement>('script[src*="/src/main.tsx"]')!.src;
       const module = await import(path);
       Reflect.set(window, '__initializingApplication', module.mountApplication(document.getElementById('root')));
     });
@@ -173,7 +408,11 @@ test('React asset dialogs preserve consent and isolate pending edit results', as
     canvas.width = 16; canvas.height = 16;
     const context = canvas.getContext('2d')!;
     context.fillStyle = '#b32939'; context.fillRect(0, 0, 16, 16);
-    return canvas.toDataURL();
+    const source = canvas.toDataURL();
+    context.fillStyle = '#285943'; context.fillRect(0, 0, 16, 16);
+    const currentPhoto = canvas.toDataURL();
+    Object.defineProperty(document.querySelector('#viewport canvas'), 'toDataURL', { value: () => currentPhoto, configurable: true });
+    return source;
   });
   const file = { name: 'react-asset-fixture.png', mimeType: 'image/png', buffer: Buffer.from(fixture.split(',')[1], 'base64') };
   await page.locator('#library-open').click();
@@ -251,12 +490,9 @@ test('React controls preserve studio workflows', async ({ page }, testInfo) => {
   await focal.focus();
   const originalFocal = Number(await focal.getAttribute('aria-valuenow'));
   await focal.press('ArrowRight');
-  await expect(page.locator('#focal-length')).toHaveValue(String(originalFocal + 1));
-  await page.locator('#focal-length').evaluate((input: HTMLInputElement) => {
-    input.value = '50';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-  });
-  await expect(focal).toHaveAttribute('aria-valuenow', '50');
+  await expect(focal).toHaveAttribute('aria-valuenow', String(originalFocal + 1));
+  await page.locator('#undo-button').click();
+  await expect(focal).toHaveAttribute('aria-valuenow', String(originalFocal));
   await page.getByRole('tab', { name: '姿势', exact: true }).click();
   await expect(page.locator('#panel-poses')).toBeVisible();
   await expect(page.locator('#panel-shots')).toBeHidden();

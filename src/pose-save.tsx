@@ -1,14 +1,12 @@
 import { useRef, useState, useSyncExternalStore } from 'react';
-import { createRoot } from 'react-dom/client';
-import { flushSync } from 'react-dom';
-import { AutoComplete, Button, ConfigProvider, Input, Modal, Tooltip } from 'antd';
+import { AutoComplete, Button, Input, Modal, Tooltip } from 'antd';
 import type { InputRef } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
 import { CopyPlus, Save } from 'lucide-react';
-import { studioTheme } from './components/StudioControls';
+import type { ViewHost } from './react-view';
 import type { JointPose, PoseEntry } from './scene-types';
 
 interface PoseSaveOptions {
+  views: ViewHost;
   getEntry(): PoseEntry | undefined;
   getFolders(): string[];
   capturePose(): JointPose;
@@ -97,9 +95,6 @@ export function createPoseSaveControls(options: PoseSaveOptions) {
   const container = (options.root ?? document).querySelector<HTMLElement>('#pose-save-controls');
   if (!container) throw new Error('Missing pose save container');
   const availability = createAvailability(options);
-  const reactRoot = createRoot(container);
-  flushSync(() => reactRoot.render(<ConfigProvider locale={zhCN} theme={studioTheme}>
-    <PoseSaveControls options={options} availability={availability} />
-  </ConfigProvider>));
-  return { update: availability.update, dispose() { reactRoot.unmount(); } };
+  const view = options.views.mount(container, <PoseSaveControls options={options} availability={availability} />);
+  return { update: availability.update, dispose: view.dispose };
 }

@@ -3,14 +3,14 @@ interface Identity {
   user?: { id: string; name: string } | null;
 }
 
-export async function initializeAuth(signal?: AbortSignal): Promise<void> {
+export async function initializeAuth(signal?: AbortSignal): Promise<Identity> {
   const previousFetch = window.fetch;
   const originalFetch = previousFetch.bind(window);
   const response = await originalFetch('/api/auth/session', { cache: 'no-store', signal });
   if (!response.ok) throw new Error('无法连接认证服务。');
   const identity: Identity = await response.json();
   signal?.throwIfAborted();
-  if (!identity.enabled) return;
+  if (!identity.enabled) return identity;
   let ended = false;
   let disposed = false;
   function expire() {
@@ -23,11 +23,6 @@ export async function initializeAuth(signal?: AbortSignal): Promise<void> {
   const user = identity.user;
   if (!user) { expire(); throw new Error('请先登录。'); }
   const userId = user.id;
-  const link = document.querySelector<HTMLAnchorElement>('#account-link');
-  if (link) {
-    link.hidden = false;
-    link.title = user.name + ' · 账户与退出登录';
-  }
   window.studioIdentity = user.id;
   const authenticatedFetch: typeof fetch = async (input, options = {}) => {
     const url = new URL(input instanceof Request ? input.url : input, location.href);
@@ -64,4 +59,5 @@ export async function initializeAuth(signal?: AbortSignal): Promise<void> {
     if (window.fetch === authenticatedFetch) window.fetch = previousFetch;
     if (window.studioIdentity === userId) delete window.studioIdentity;
   }, { once: true });
+  return identity;
 }

@@ -2,7 +2,7 @@ import { Button, Input } from 'antd';
 import { Camera, Download, Eraser, ImagePlus, Images, RefreshCw, Replace, Shirt, Trash2, UserRoundPlus, WandSparkles, X } from 'lucide-react';
 import { createImagePreview } from './image-preview';
 import { requiredElement } from './dom';
-import { mountView } from './react-view';
+import type { ViewHost } from './react-view';
 import { imageDataUrl, LibraryError } from './library-client';
 import type { LibraryClient } from './library-client';
 import type { createLibrary, LibraryAsset } from './library';
@@ -68,10 +68,12 @@ interface RetouchState {
   configured: boolean;
 }
 
-export function createRetouch(capturePhoto: () => Photo | undefined, { client, library }: { client: LibraryClient; library: ReturnType<typeof createLibrary> }) {
+export function createRetouch(capturePhoto: () => Photo | undefined, { client, library, views, onBusyChange }: {
+  client: LibraryClient; library: ReturnType<typeof createLibrary>; views: ViewHost; onBusyChange(busy: boolean): void;
+}) {
   const dialog = requiredElement<HTMLDialogElement>('#retouch-dialog');
   const openButton = requiredElement('#retouch-open');
-  const imagePreview = createImagePreview();
+  const imagePreview = createImagePreview(views);
   const model: RetouchState = {
     source: null, result: null, references: { reference: null, garment: null }, sourceVersion: 0, resultSourceVersion: null,
     latestPhoto: null, photoName: '', view: 'source', busy: false, loading: false, checking: false, preferencesReady: false,
@@ -87,7 +89,7 @@ export function createRetouch(capturePhoto: () => Photo | undefined, { client, l
   let preferenceSaves = 0;
   let preferenceVersion = 0;
   const snapshot = () => ({ ...model, references: { ...model.references } });
-  const renderer = mountView(dialog, snapshot(), state => {
+  const renderer = views.mountView(dialog, snapshot(), state => {
     const image = state.view === 'result' ? state.result : state.source;
     const alt = state.view === 'result' ? 'AI 修图结果' : '修图原图';
     const locked = state.busy || state.loading;
@@ -169,7 +171,7 @@ export function createRetouch(capturePhoto: () => Photo | undefined, { client, l
     if (disposed) return;
     if (reportedBusy !== model.busy) {
       reportedBusy = model.busy;
-      window.dispatchEvent(new CustomEvent('studio:retouch-busy', { detail: model.busy }));
+      onBusyChange(model.busy);
     }
     renderer.update(snapshot());
   }
@@ -299,10 +301,10 @@ export function createRetouch(capturePhoto: () => Photo | undefined, { client, l
     } finally { model.busy = false; refresh(); }
   }
   const close = () => openButton.focus({ preventScroll: true });
-  openButton.addEventListener('click', open); dialog.addEventListener('close', close);
+  dialog.addEventListener('close', close);
   const ready = restorePreferences();
   return {
-    ready,
+    ready, open,
     get hasPendingChanges() { return preferenceDirty || preferenceSaves > 0 || model.loading || model.busy; },
     async useAsset(asset: LibraryAsset, image: string) {
       await ready;
@@ -319,8 +321,8 @@ export function createRetouch(capturePhoto: () => Photo | undefined, { client, l
     dispose() {
       if (disposed) return;
       disposed = true; requests.abort(); clearTimeout(preferenceTimer);
-      if (reportedBusy) window.dispatchEvent(new CustomEvent('studio:retouch-busy', { detail: false }));
-      openButton.removeEventListener('click', open); dialog.removeEventListener('close', close);
+      if (reportedBusy) onBusyChange(false);
+      dialog.removeEventListener('close', close);
       imagePreview.destroy(); dialog.close(); renderer.dispose();
     },
   };

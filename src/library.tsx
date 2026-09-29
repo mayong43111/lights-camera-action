@@ -3,13 +3,14 @@ import { Download, ImagePlus, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { imageDataUrl } from './library-client';
 import type { Asset, AssetKind, LibraryClient } from './library-client';
 import { requiredElement } from './dom';
-import { mountView } from './react-view';
+import type { ViewHost } from './react-view';
 
 const names = { photo: '拍摄相册', result: '生成历史', person: '人物素材', garment: '服装素材' };
 export type LibraryAsset = Pick<Asset, 'id' | 'kind' | 'name' | 'created'>
   & Partial<Pick<Asset, 'mime' | 'width' | 'height' | 'metadata'>> & { pending?: boolean; image?: string };
 type UseImage = (asset: LibraryAsset, image: string) => unknown;
 interface LibraryOptions {
+  views: ViewHost;
   client: LibraryClient;
   onUse: UseImage;
   onDelete(id: string): unknown;
@@ -17,7 +18,7 @@ interface LibraryOptions {
   root?: ParentNode;
 }
 
-export function createLibrary({ client, onUse, onDelete, root = document }: LibraryOptions) {
+export function createLibrary({ client, onUse, onDelete, views, root = document }: LibraryOptions) {
   const dialog = requiredElement<HTMLDialogElement>('#library-dialog', root);
   const pending: LibraryAsset[] = [];
   let kind: AssetKind = 'photo';
@@ -38,7 +39,7 @@ export function createLibrary({ client, onUse, onDelete, root = document }: Libr
   const allItems = (): LibraryAsset[] => [...pending.filter(asset => asset.kind === kind), ...items];
   const snapshot = () => ({ kind, total, selected, selectedImage, busy, loading, query, status, picker: !!picker,
     more: items.length < total, items: allItems(), thumbnails: new Map(thumbnails) });
-  const view = mountView(dialog, snapshot(), state => {
+  const view = views.mountView(dialog, snapshot(), state => {
     const visible = state.items.filter(asset => asset.name.toLocaleLowerCase().includes(state.query.trim().toLocaleLowerCase()));
     const disabled = state.busy || !state.selectedImage;
     return <>
@@ -203,19 +204,16 @@ export function createLibrary({ client, onUse, onDelete, root = document }: Libr
     } catch (error) { status = error instanceof Error ? error.message : String(error); }
     finally { busy = false; render(); }
   }
-  const openButton = requiredElement('#library-open', root);
-  const openFromButton = () => open();
   const close = () => {
     generation++; selectionVersion++; releaseThumbnails(); selectedImage = null; picker = null; loading = false; render();
   };
-  openButton.addEventListener('click', openFromButton);
   dialog.addEventListener('close', close);
   return {
     open, save, retain, get hasPending() { return pending.length > 0 || busy || saves > 0; },
     refresh: () => { if (dialog.open) void load(); },
     dispose() {
       disposed = true; generation++; selectionVersion++; releaseThumbnails();
-      openButton.removeEventListener('click', openFromButton); dialog.removeEventListener('close', close);
+      dialog.removeEventListener('close', close);
       dialog.close(); view.dispose();
     },
   };

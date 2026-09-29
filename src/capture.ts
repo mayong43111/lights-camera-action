@@ -3,6 +3,8 @@ import type { PerspectiveCamera, WebGLRenderer } from 'three';
 import type { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { createLifetime } from './lifetime';
 
+export interface CaptureState { takeNumber: number; recording: boolean; stopping: boolean; elapsed: number }
+
 export interface CaptureOptions {
   renderer: Pick<WebGLRenderer, 'getSize' | 'getPixelRatio' | 'setPixelRatio' | 'setSize' | 'domElement'>;
   composer: Pick<EffectComposer, 'setSize' | 'render'>;
@@ -15,11 +17,11 @@ export interface CaptureOptions {
   onResize(): void;
   announce(message: string): void;
   setHelpersVisible?(visible: boolean): void;
-  root?: ParentNode;
+  onStateChange?(state: CaptureState): void;
   Recorder?: typeof MediaRecorder;
 }
 
-export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, setHelpersVisible = () => {}, root = document, Recorder = globalThis.MediaRecorder }: CaptureOptions) {
+export function createCaptureController({ renderer, composer, camera, character, floorMarks, getAspect, isLoading, onPhoto, onResize, announce, setHelpersVisible = () => {}, onStateChange = () => {}, Recorder = globalThis.MediaRecorder }: CaptureOptions) {
   const lifetime = createLifetime();
   let takeNumber = 1;
   let recorder: MediaRecorder | null = null;
@@ -27,10 +29,10 @@ export function createCaptureController({ renderer, composer, camera, character,
   let restoreRecordingUi: (() => void) | null = null;
   let finishRecording: (() => boolean) | null = null;
   let disposed = false;
-  function element<ElementType extends HTMLElement = HTMLElement>(selector: string): ElementType {
-    const node = root.querySelector<ElementType>(selector);
-    if (!node) throw new Error(`Missing capture element: ${selector}`);
-    return node;
+  let state: CaptureState = { takeNumber, recording: false, stopping: false, elapsed: 0 };
+  function publish(patch: Partial<CaptureState>) {
+    state = { ...state, ...patch };
+    if (!disposed) onStateChange(state);
   }
 
   function takePhoto({ archive = true, download }: { archive?: boolean; download?: boolean } = {}) {
@@ -50,13 +52,10 @@ export function createCaptureController({ renderer, composer, camera, character,
     const previousSize = renderer.getSize(new Vector2());
     const previousRatio = renderer.getPixelRatio();
     const previousAspect = camera.aspect;
-    const overlay = element('.viewfinder');
-    const overlayHidden = overlay.hidden;
     const wasEditing = character.editing;
     const marksVisible = floorMarks.visible;
 
     try {
-      overlay.hidden = true;
       character.setEditing(false);
       setHelpersVisible(false);
       floorMarks.visible = false;
@@ -72,7 +71,6 @@ export function createCaptureController({ renderer, composer, camera, character,
       if (archive) {
         Promise.resolve(onPhoto(dataUrl, name)).catch(error => announce(error instanceof Error ? error.message : '相册保存失败，请重试。'));
         takeNumber += 1;
-        element('#take-number').textContent = String(takeNumber).padStart(2, '0');
       }
       return { image: dataUrl, name };
     } finally {
@@ -82,35 +80,25 @@ export function createCaptureController({ renderer, composer, camera, character,
       composer.setSize(previousSize.x, previousSize.y);
       camera.aspect = previousAspect;
       camera.updateProjectionMatrix();
-      overlay.hidden = overlayHidden;
       character.setEditing(wasEditing);
       setHelpersVisible(true);
+      publish({ takeNumber });
     }
   }
 
   function startRecordingUi() {
     const wasEditing = character.editing;
-    const lockedControls = [...root.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('#edit-joints, #pose-mode, [data-character], #photo-button, #reset-button, #load-button, #undo-button, #pose-save, #pose-save-as, #shot-apply, #prop-controls input, #prop-controls select, #prop-controls button, [data-aspect]')];
-    const disabledStates = lockedControls.map((control) => control.disabled);
     restoreRecordingUi = () => {
       character.setEditing(wasEditing);
       setHelpersVisible(true);
-      lockedControls.forEach((control, index) => { control.disabled = disabledStates[index]; });
     };
     character.setEditing(false);
     setHelpersVisible(false);
-    lockedControls.forEach((control) => { control.disabled = true; });
-    const button = element<HTMLButtonElement>('#record-button');
-    button.classList.add('is-recording');
-    button.setAttribute('aria-label', '停止录制');
-    button.title = '停止录制';
-    element('#record-label').textContent = '停止录制';
-    element('#record-time').textContent = '00:00';
-    element('#recording-indicator').hidden = false;
+    publish({ recording: true, stopping: false, elapsed: 0 });
     const startedAt = Date.now();
     recordingTimer = window.setInterval(() => {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      element('#record-time').textContent = `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
+      publish({ elapsed });
     }, 250);
   }
 
@@ -119,21 +107,15 @@ export function createCaptureController({ renderer, composer, camera, character,
     restoreRecordingUi = null;
     if (recordingTimer !== null) clearInterval(recordingTimer);
     recordingTimer = null;
+    publish({ recording: false, stopping: false });
     if (disposed) return;
-    const button = element<HTMLButtonElement>('#record-button');
-    button.disabled = false;
-    button.classList.remove('is-recording');
-    button.setAttribute('aria-label', '录制视频');
-    button.title = '录制视频';
-    element('#record-label').textContent = '录制视频';
-    element('#recording-indicator').hidden = true;
     onResize();
   }
 
   function toggleRecording() {
     if (disposed) return;
     if (recorder?.state === 'recording') {
-      element<HTMLButtonElement>('#record-button').disabled = true;
+      publish({ stopping: true });
       try {
         recorder.stop();
       } catch (error) {
@@ -201,7 +183,7 @@ export function createCaptureController({ renderer, composer, camera, character,
   }
 
   return {
-    takePhoto, toggleRecording, get isRecording() { return recorder !== null; },
+    takePhoto, toggleRecording, get isRecording() { return state.recording; },
     dispose() {
       if (disposed) return;
       disposed = true;

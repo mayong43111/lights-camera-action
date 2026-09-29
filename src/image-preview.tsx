@@ -1,9 +1,9 @@
 import { Button } from 'antd';
 import { Maximize, Scan, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { requiredElement } from './dom';
-import { mountView } from './react-view';
+import type { ViewHost } from './react-view';
 
-export function createImagePreview() {
+export function createImagePreview(views: ViewHost) {
   const container = document.createElement('div');
   document.body.append(container);
   const pointers = new Map<number, { x: number; y: number }>();
@@ -20,7 +20,7 @@ export function createImagePreview() {
   let width = 0;
   let height = 0;
   const snapshot = () => ({ scale, offsetX, offsetY, ready, source, title, status, width, height });
-  const view = mountView(container, snapshot(), state => <dialog className="image-viewer" aria-label="图片预览"
+  const view = views.mountView(container, snapshot(), state => <dialog className="image-viewer" aria-label="图片预览"
     onClose={closed} onClick={event => { if (event.target === event.currentTarget) dialog.close(); }}
     onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dialog.close(); }

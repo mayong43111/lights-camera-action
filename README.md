@@ -129,15 +129,17 @@ AZURE_OPENAI_VISION_API_VERSION=2024-10-21
 
 React 入口为 [src/main.tsx](src/main.tsx)，[src/App.tsx](src/App.tsx) 负责主题、认证与启动错误。工作区由 [src/layout/StudioLayout.tsx](src/layout/StudioLayout.tsx) 装配：项目顶栏、七类工具导航、可折叠参数区、主视口和底部拍摄栏。手机端将视口和拍摄入口放在上方，横向工具导航与独立滚动参数区置于下方。
 
-顶栏、视口、拍摄栏分别位于 [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)。场景与摄影参数分别由 [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx) 管理；切换工具只改变可见性，不卸载控件或重建场景。[src/StudioMarkup.tsx](src/StudioMarkup.tsx) 保留素材窗口容器与兼容导出。[src/components/StudioControls.tsx](src/components/StudioControls.tsx) 提供 Ant Design 按钮、滑块与控制器同步。布局样式集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
+顶栏、视口、拍摄栏分别位于 [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)。场景与摄影参数分别由 [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx) 管理；切换工具只改变可见性，不卸载控件或重建场景。[src/StudioMarkup.tsx](src/StudioMarkup.tsx) 保留素材窗口容器与兼容导出。[src/components/StudioControls.tsx](src/components/StudioControls.tsx) 提供 Ant Design 按钮和受控数值控件。布局样式集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
 
-本次为渐进式前端迁移：React 界面、认证与存储客户端、场景协议、姿势库和组合预设数据层使用严格 TypeScript。组合预设面板、姿势分类搜索与展开窗口、保存及另存窗口已由 React 状态和 Ant Design 控件管理；展开与收起共享筛选和选中状态，保存失败保留输入，姿势选择与保存显式触发配置持久化。
+React 界面、认证与存储客户端、场景协议、姿势库和组合预设数据层使用严格 TypeScript。组合预设面板、姿势分类搜索与展开窗口、保存及另存窗口由 React 状态和 Ant Design 控件管理；展开与收起共享筛选和选中状态，保存失败保留输入，姿势选择与保存显式触发配置持久化。
 
 `src` 下的自有应用源码已全部迁为 TypeScript / TSX，已移除 `allowJs`，统一通过严格类型检查；第三方 Three.js、VRM、Lucide 及 vendored JS 未改写。React 入口仍为 [src/main.tsx](src/main.tsx)，原生场景控制器已独立命名为 [src/studio-controller.ts](src/studio-controller.ts)，负责渲染装配、项目恢复和撤销。
 
-道具参数、相册列表、修图和大图预览现由 React 渲染状态快照，通过 `useSyncExternalStore` 连接领域控制器，不再动态拼接 HTML 或逐项改写界面。按钮使用 Ant Design，文件选择、原生模态层和 Three.js 交互保留浏览器/渲染器 API；相机与灯光继续使用已有控件桥接，未把 Three.js 对象放入 React 状态。版本 1 项目与姿势数据继续兼容；测试和独立实验脚本保留 JavaScript。开发服务器只对前端源码及资源热更新，数据库与运行产物写入不会刷新页面。
+人物关节、布景、摄影参数、顶栏和拍摄栏由 [src/studio-model.ts](src/studio-model.ts) 的类型化快照与命令驱动；道具、相册、修图和预览通过同一 React 根的 Portal 渲染，不再用隐藏输入框、MutationObserver 或模拟 DOM 事件同步状态。文件选择、焦点、原生模态层和 Three.js 交互保留浏览器/渲染器 API，不把 Three.js 对象放入 React 状态。版本 1 项目与姿势数据继续兼容；测试和独立实验脚本保留 JavaScript。开发服务器只对前端源码及资源热更新，数据库与运行产物写入不会刷新页面。
 
-`createStudioController(signal)` 显式创建场景，React 卸载或初始化失败时取消旧实例：停止渲染、媒体轨道与计时器，移除监听器和 ResizeObserver，释放模型、材质、纹理、gizmo、缩略图 URL 与 React 子视图。异步加载在返回后检查实例是否仍有效；认证轮询和 fetch 包装也随实例清理。修图提交固定输入快照，重开窗口不会让旧请求覆盖新原图；中止浏览器请求不保证 Azure 停止处理或计费。
+`createStudioController(signal, model, views)` 显式装配场景；[src/studio-runtime.ts](src/studio-runtime.ts) 管理渲染资源，[src/project-session.ts](src/project-session.ts) 管理恢复、撤销与保存。React 卸载或初始化失败时取消旧实例：停止渲染、媒体轨道与计时器，移除监听器和 ResizeObserver，释放模型、材质、纹理、gizmo、缩略图 URL 与 Portal 视图。异步加载在返回后检查实例是否仍有效；认证轮询和 fetch 包装也随实例清理。修图提交固定输入快照，重开窗口不会让旧请求覆盖新原图；中止浏览器请求不保证 Azure 停止处理或计费。
+
+后端入口 [server.py](server.py) 仅负责命令行启动并导出 `app`；[studio_app.py](studio_app.py) 负责 Flask 路由、安全边界和认证装配，[ai_service.py](ai_service.py) 负责独立的 Azure 请求与图像校验。认证、SQLite 存储与协议校验继续使用原模块，HTTP 接口和生产 `server:app` 入口不变；部署脚本包含所有后端模块。
 
 | 模块 | 职责与扩展入口 |
 | --- | --- |

@@ -95,14 +95,19 @@
 
 ### 6.2 模块边界
 
-- [src/main.tsx](src/main.tsx)、[src/App.tsx](src/App.tsx)：React 挂载、主题、认证与启动错误处理。
+- [src/main.tsx](src/main.tsx)、[src/App.tsx](src/App.tsx)：唯一 React 根、主题、认证与启动错误处理；每个应用实例拥有独立的摄影棚模型及 Portal 视图宿主。
+- [src/studio-model.ts](src/studio-model.ts)、[src/studio-context.ts](src/studio-context.ts)：人物关节、布景、镜头灯光、录制、保存、账户及工具选择的共享快照与类型化命令。界面通过 `useSyncExternalStore` 订阅，不读取隐藏输入框、不监听 DOM 属性或派发模拟事件同步业务状态。
+- [src/react-view.tsx](src/react-view.tsx)：将组合、姿势、道具、相册、修图和预览窗口作为 Portal 交给主 React 根。同步挂载/更新仅为现有立即读取 DOM 的功能接口保留，不再创建功能子根或重复包裹主题。
 - [src/layout/StudioLayout.tsx](src/layout/StudioLayout.tsx)：工具导航、键盘操作、折叠状态与工作区装配；响应式布局集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
 - [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)：项目顶栏、渲染容器与状态、拍摄操作及修图忙碌状态。
 - [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx)：场景与摄影参数视图，保持所有控件 ID 与挂载容器稳定。
 - [src/StudioMarkup.tsx](src/StudioMarkup.tsx)：素材窗口容器与兼容导出；Ant Design 基础控件位于 [src/components/StudioControls.tsx](src/components/StudioControls.tsx)。
-- [src/studio-controller.ts](src/studio-controller.ts)：应用装配、相机灯光控制、项目 v1 捕获恢复与撤销；通过 `createStudioController(signal)` 随 React 实例创建和释放。
+- [src/studio-controller.ts](src/studio-controller.ts)：应用装配、类型化业务命令、领域对象与共享快照的同步，提供项目 v1 状态的捕获/应用回调；恢复时兼容旧数字字符串；接收应用传入的生命周期信号、模型和视图宿主。DOM 查询仅用于视口与功能挂载容器。
+- [src/studio-runtime.ts](src/studio-runtime.ts)：渲染器、相机、轨道控制、环境与后处理、视口尺寸、帧循环和 GPU 资源释放。只接收视口容器及回调，不查询业务控件；角色和道具等功能先释放，再释放运行时。
+- [src/project-session.ts](src/project-session.ts)：项目修改通知、30 步撤销、恢复边界、自动保存及可订阅的保存状态。复用存储客户端的写入队列和版本冲突保护；恢复期间抑制修改通知，成功加载后才启用保存，失败写入保留待保存状态。导航、筛选和未修改数值的操作不触发自动保存。
 - [src/studio-scene.ts](src/studio-scene.ts)：纯场景与灯具工厂，不读取 DOM。
-- [src/capture.ts](src/capture.ts)：拍摄、录制计时、控件锁定与失败清理；通过回调接入相册。
+- [src/studio-defaults.ts](src/studio-defaults.ts)：纯灯光定义，界面与场景共享，不引入 Three.js 渲染模块。
+- [src/capture.ts](src/capture.ts)：拍摄、录制计时、媒体轨道与失败清理；通过回调接入相册并发布拍摄状态，由 React 决定控件锁定与状态显示。
 - [src/scene-types.ts](src/scene-types.ts)、[src/pose-schema.ts](src/pose-schema.ts)、[src/project-schema.ts](src/project-schema.ts)、[src/prop-schema.ts](src/prop-schema.ts)：共享协议、运行时校验与默认状态。
 - [src/shot-presets.ts](src/shot-presets.ts)、[src/shot-model.ts](src/shot-model.ts)、[src/shot-browser.tsx](src/shot-browser.tsx)：20 组手工组合、授权分析、React 草稿和分类列表；应用与保存均为显式动作。
 - [src/props.tsx](src/props.tsx)：自有道具几何、React 参数视图、TransformControls 变换、数值校验与资源释放。
@@ -110,20 +115,21 @@
 - [src/pose-library.ts](src/pose-library.ts)、[src/pose-store.ts](src/pose-store.ts)：姿势数据加载、校验、本地覆盖与陈旧写入保护。
 - [src/pose-browser.tsx](src/pose-browser.tsx)、[src/pose-save.tsx](src/pose-save.tsx)：React 分类搜索、展开弹窗、选中态及保存；显式触发配置持久化以适配 Portal。
 - [src/retouch.tsx](src/retouch.tsx)、[src/library.tsx](src/library.tsx)、[src/image-preview.tsx](src/image-preview.tsx)：React 修图授权表单、相册素材与大图预览；失败保留、缩放、手势和焦点恢复。修图固定提交快照，旧请求不会覆盖新原图。
-- [src/react-view.tsx](src/react-view.tsx)：`useSyncExternalStore` 快照订阅、Ant Design 主题与 React 子视图卸载。
 - [src/lifetime.ts](src/lifetime.ts)：取消信号与逆序资源清理，管理计时器、动画帧和临时 URL。
 - [src/library-client.ts](src/library-client.ts)、[src/auth-client.ts](src/auth-client.ts)：账户隔离、本地数据接口与 revision 写入队列。
 - [src/dom.ts](src/dom.ts)：必需节点查询，避免缺失节点被静默忽略。
 - [scene_schema.py](scene_schema.py)：服务端场景与预设校验。
 - `storage.py`：SQLite 事务，保存原图 BLOB、320px 缩略图、元数据与配置；按分类和时间索引，每页 40 张。每次操作使用独立连接，生成完成即在服务端归档；写入失败仍把生成图片返回浏览器供重试或下载。
-- `server.py`：白名单静态资源与 `/api/ai/status`、`/api/ai/edit`，读取 `.env` 后代理 Azure 请求；验证 Host、Origin 与令牌，限制图片/请求大小，不提供任意 URL 代理，禁止 Azure 重定向与自动重试。
+- [server.py](server.py)：命令行启动、热重载、端口选择与浏览器打开；保留生产 WSGI 入口 `server:app`。
+- [studio_app.py](studio_app.py)：Flask 应用与认证装配，白名单静态资源、AI 和数据路由；验证 Host、Origin、登录与令牌，限制请求大小，统一异常映射、响应头及 AI 并发锁。
+- [ai_service.py](ai_service.py)：独立于 Flask 的 Azure 配置、图像校验、修图与姿势分析请求及结果校验；禁止任意 URL、重定向与自动重试。原认证、存储和场景协议模块保持独立。
 - `start.ps1`：默认同时启动可重载的 Python API 与 Vite 开发服务，退出时清理本次启动的 API 进程；生产模式显式构建并启动同源服务。端口占用时拒绝启动，不更改既有服务。
 
 单元测试当前禁用并保留源码；默认 `npm test` 不运行测试，Python 单元测试类与 Playwright 模块测试入口标记跳过。构建保留严格类型检查；浏览器 E2E 仅通过 `npm run test:e2e` 手动执行。源码与样式走 Vite/React HMR，静态资源变化触发整页刷新，运行时数据不参与页面热更新。
 
 ### 6.3 场景对象
 
-自有应用源码全部使用严格 TypeScript，未启用 `allowJs`。道具、相册、修图和图片预览由 React 渲染领域状态快照；Three.js 场景运算、原生模态层和文件输入保留命令式 API，相机灯光使用已有控件桥接。App 卸载会取消未完成初始化、停止渲染与录制、移除监听器/观察器、释放 GPU 资源和子视图，认证 fetch 包装与轮询同时清理。测试与独立实验脚本可保留 JavaScript。第三方资源不在迁移范围内。
+自有前端应用源码全部使用严格 TypeScript，未启用 `allowJs`。业务控件由 React 渲染状态快照；Three.js 场景运算、原生模态层、焦点和文件输入保留命令式 API，不将渲染对象存入 React 状态。App 卸载会取消未完成初始化、停止渲染与录制、移除监听器/观察器、释放 GPU 资源和 Portal 视图，认证 fetch 包装与轮询同时清理。测试与独立实验脚本可保留 JavaScript。第三方资源不在迁移范围内。
 
 ```text
 Scene
