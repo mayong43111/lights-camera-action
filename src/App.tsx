@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Alert, ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { createIcons, icons } from 'lucide';
 import { AssetDialogs } from './StudioMarkup';
 import { Topbar } from './layout/StudioHeader';
 import { StudioLayout } from './layout/StudioLayout';
@@ -18,7 +17,6 @@ export function App() {
   useEffect(() => {
     let mounted = true;
     const controller = new AbortController();
-    window.lucide = { createIcons: () => createIcons({ icons }) };
     async function start() {
       try {
         const identity = await initializeAuth(controller.signal);

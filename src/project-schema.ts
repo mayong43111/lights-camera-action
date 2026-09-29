@@ -1,10 +1,29 @@
 import { validPose } from './pose-schema';
 import { validProps } from './prop-schema';
 import { finiteRange, isColor, isRecord, isVector } from './schema-utils';
-import type { ProjectState, StudioProject } from './scene-types';
+import type { LightId, ProjectState, ShotLight, StudioProject } from './scene-types';
+import type { LightDefinition as StudioLightDefinition } from './studio-defaults';
 
 interface LightDefinition { id: string; intensity: number; color: string; position: number[] }
 interface ProjectCatalogs { poses: object; characters: object; lightDefinitions: { id: string }[] }
+
+export function normalizeProjectState(state: ProjectState, lightDefinitions: readonly StudioLightDefinition[]) {
+  const lights = Object.fromEntries(Object.entries(state.lights).map(([id, light]) => {
+    const definition = lightDefinitions.find(definition => definition.id === id);
+    if (!definition) throw new Error('未知灯光配置');
+    return [id, {
+      enabled: light.enabled, color: light.color, intensity: Number(light.intensity),
+      position: Number(light.position), height: Number(light.height ?? definition.position[1]),
+      depth: Number(light.depth ?? definition.position[2]),
+    }];
+  })) as Record<LightId, ShotLight>;
+  return {
+    ...state, lights, props: state.props ?? [], background: state.background ?? null,
+    aspect: Number(state.aspect), focal: Number(state.focal), exposure: Number(state.exposure), dof: Number(state.dof),
+    rotation: Number(state.rotation ?? 0), leftArm: Number(state.leftArm ?? 0), rightArm: Number(state.rightArm ?? 0),
+    autoOrbit: state.autoOrbit ?? false, showRigs: state.showRigs ?? false, removeShadows: state.removeShadows ?? true,
+  };
+}
 
 export function createDefaultState(defaultPose: string, lightDefinitions: LightDefinition[]): ProjectState {
   return {

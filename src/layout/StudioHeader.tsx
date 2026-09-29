@@ -4,10 +4,11 @@ import { useRef } from 'react';
 import { useStudio } from '../studio-context';
 
 export function Topbar() {
-  const { state, actions } = useStudio();
+  const { state, actions } = useStudio(state => ({ ready: state.ready, loading: state.loading, busy: state.busy,
+    recording: state.capture.recording, persistence: state.persistence, account: state.account }));
   const projectInput = useRef<HTMLInputElement>(null);
   const disabled = state.loading || state.busy;
-  const locked = disabled || state.capture.recording;
+  const locked = disabled || state.recording;
   return (<header className="topbar">
       <div className="brand-block">
         <span className="slate-mark" aria-hidden="true"><i></i><i></i><i></i></span>

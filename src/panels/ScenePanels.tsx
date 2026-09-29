@@ -6,10 +6,11 @@ import { JOINTS } from '../pose-schema';
 import type { Vector3Tuple } from '../scene-types';
 
 export function CreationPanel({ active = 'shots' }: { active?: string } = {}) {
-  const { state, actions } = useStudio();
+  const { state, actions } = useStudio(state => ({ character: state.character, stage: state.stage,
+    ready: state.ready, busy: state.busy, recording: state.capture.recording }));
   const character = state.character;
   const disabled = !state.ready || state.busy;
-  const locked = disabled || state.capture.recording;
+  const locked = disabled || state.recording;
   const range = { disabled, onBeforeChange: actions.beginEdit };
   const poseInput = useRef<HTMLInputElement>(null);
   const backgroundInput = useRef<HTMLInputElement>(null);

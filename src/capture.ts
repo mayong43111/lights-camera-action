@@ -98,7 +98,7 @@ export function createCaptureController({ renderer, composer, camera, character,
     const startedAt = Date.now();
     recordingTimer = window.setInterval(() => {
       const elapsed = Math.floor((Date.now() - startedAt) / 1000);
-      publish({ elapsed });
+      if (elapsed !== state.elapsed) publish({ elapsed });
     }, 250);
   }
 

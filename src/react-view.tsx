@@ -40,7 +40,7 @@ export function createViewHost() {
         update(state: State) {
           if (disposed) return;
           snapshot = state;
-          flushSync(() => subscribers.forEach(listener => listener()));
+          subscribers.forEach(listener => listener());
         },
         dispose() { disposed = true; view.dispose(); subscribers.clear(); },
       };

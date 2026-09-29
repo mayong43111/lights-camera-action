@@ -167,6 +167,7 @@ test('character stage toolbar and recording use controlled state', async ({ page
   await expect(page.locator('[data-aspect="1"]')).toHaveAttribute('aria-pressed', 'true');
   await page.locator('#record-button').click();
   await expect(page.locator('#record-button')).toHaveAttribute('aria-label', '停止录制');
+  await expect(page.locator('#record-time')).not.toHaveText('00:00');
   await expect(page.locator('#photo-button')).toBeDisabled();
   await expect(page.locator('#undo-button')).toBeDisabled();
   await expect(page.locator('[data-aspect="1.5"]')).toBeDisabled();
@@ -202,6 +203,94 @@ test('character stage toolbar and recording use controlled state', async ({ page
   await expect(page.locator('#viewport canvas')).toHaveCount(0);
   expect(await page.evaluate(() => (Reflect.get(window, '__recordingTracks') as MediaStreamTrack[]).every(track => track.readyState === 'ended'))).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test('project framing and background restoration wait for assets', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  async function readProject() {
+    const request = page.waitForRequest(request => request.url().endsWith('/api/data/settings/scene') && request.method() === 'POST');
+    await page.locator('#config-save').click();
+    const project: StudioProject = (await request).postDataJSON().value;
+    await expect(page.locator('#persistence-status')).toHaveText('配置已保存到本机');
+    return project;
+  }
+  await page.locator('#tab-camera').click();
+  const frames = new Set<string>();
+  for (const mode of ['full', 'half', 'face', 'low']) {
+    await page.locator(`[data-framing="${mode}"]`).click();
+    const { state } = await readProject();
+    expect([...state.cameraPosition, ...state.target].every(Number.isFinite)).toBe(true);
+    expect(Math.hypot(...state.cameraPosition.map((value, index) => value - state.target[index]))).toBeGreaterThan(0.1);
+    frames.add(JSON.stringify([state.cameraPosition, state.target]));
+  }
+  expect(frames.size).toBe(4);
+  const original = await readProject();
+  const image = await page.evaluate(async () => {
+    const path = performance.getEntriesByType('resource').find(entry => new URL(entry.name).pathname.endsWith('/three.js'))!.name;
+    const three = await import(path);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1; canvas.height = 1;
+    const image = canvas.toDataURL();
+    const load = three.TextureLoader.prototype.loadAsync;
+    Reflect.set(window, '__restoreBackgroundLoader', () => { three.TextureLoader.prototype.loadAsync = load; });
+    three.TextureLoader.prototype.loadAsync = function(url: string) {
+      if (url !== image) return load.call(this, url);
+      return new Promise((resolve, reject) => {
+        Reflect.set(window, '__finishBackground', (success: boolean) => {
+          Reflect.deleteProperty(window, '__finishBackground');
+          if (!success) { reject(new Error('fixture decode failure')); return; }
+          const texture = new three.CanvasTexture(canvas);
+          Reflect.set(window, '__releasedBackgroundDisposed', false);
+          texture.addEventListener('dispose', () => Reflect.set(window, '__releasedBackgroundDisposed', true));
+          resolve(texture);
+        });
+      });
+    };
+    return image;
+  });
+  const project = structuredClone(original);
+  project.state.background = image;
+  project.state.focal = Number(original.state.focal) === 64 ? 65 : 64;
+  const importProject = () => page.locator('#project-input').setInputFiles({ name: 'background-project.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(project)) });
+  try {
+    await importProject();
+    await expect.poll(() => page.evaluate(() => typeof Reflect.get(window, '__finishBackground'))).toBe('function');
+    await expect(page.locator('#config-save')).toBeDisabled();
+    await expect(page.locator('#focal-length [role="slider"]')).toHaveAttribute('aria-valuenow', String(original.state.focal));
+    await expect(page.locator('#status-message')).not.toHaveText('项目已恢复');
+    await page.evaluate(() => Reflect.get(window, '__finishBackground')(true));
+    await expect(page.locator('#status-message')).toHaveText('项目已恢复');
+    await expect(page.locator('#config-save')).toBeEnabled();
+    const restored = await readProject();
+    expect(restored.state.background).toBe(image);
+    expect(restored.state.focal).toBe(project.state.focal);
+    project.state.focal = Number(project.state.focal) + 1;
+    await importProject();
+    await expect.poll(() => page.evaluate(() => typeof Reflect.get(window, '__finishBackground'))).toBe('function');
+    await page.evaluate(() => Reflect.get(window, '__finishBackground')(false));
+    await expect(page.locator('#status-message')).toHaveText('背景图片无法解码，项目未恢复');
+    await expect(page.locator('#config-save')).toBeEnabled();
+    const preserved = await readProject();
+    expect(preserved.state.background).toBe(restored.state.background);
+    expect(preserved.state.focal).toBe(restored.state.focal);
+    await importProject();
+    await expect.poll(() => page.evaluate(() => typeof Reflect.get(window, '__finishBackground'))).toBe('function');
+    await page.evaluate(async () => {
+      const path = document.querySelector<HTMLScriptElement>('script[src*="/src/main.tsx"]')!.src;
+      (await import(path)).application.unmount();
+    });
+    await expect(page.locator('#viewport canvas')).toHaveCount(0);
+    await page.evaluate(() => Reflect.get(window, '__finishBackground')(true));
+    await expect.poll(() => page.evaluate(() => Reflect.get(window, '__releasedBackgroundDisposed'))).toBe(true);
+    expect(errors).toEqual([]);
+  } finally {
+    await page.evaluate(() => {
+      Reflect.get(window, '__finishBackground')?.(false);
+      Reflect.get(window, '__restoreBackgroundLoader')?.();
+    });
+  }
 });
 
 test('controlled photography and portal panels preserve project compatibility', async ({ page }) => {

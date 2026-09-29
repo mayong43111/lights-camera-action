@@ -1,5 +1,4 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
-import { flushSync } from 'react-dom';
 import { Button, Checkbox, Input, Select, Tooltip } from 'antd';
 import { Clapperboard, Eye, ImagePlus, RefreshCw, Save, ScanEye, Trash2 } from 'lucide-react';
 import { SHOT_CATEGORIES } from './shot-presets';
@@ -9,8 +8,8 @@ import type { ViewHost } from './react-view';
 import { useStudio } from './studio-context';
 
 export function ShotBrowser({ model }: { model: ShotModel }) {
-  const { state: studio } = useStudio();
-  const unavailable = !studio.ready || studio.busy || studio.capture.recording;
+  const { state: studio } = useStudio(state => ({ ready: state.ready, busy: state.busy, recording: state.capture.recording }));
+  const unavailable = !studio.ready || studio.busy || studio.recording;
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot);
   const input = useRef<HTMLInputElement>(null);
   const selected = model.selected();
@@ -82,5 +81,5 @@ export function ShotBrowser({ model }: { model: ShotModel }) {
 export function createShotBrowser({ root, views, ...options }: ShotModelOptions & { root: HTMLElement; views: ViewHost }) {
   const model = createShotModel(options);
   const view = views.mount(root, <ShotBrowser model={model} />);
-  return { model, ready: model.ready.then(() => { flushSync(() => {}); }), dispose() { model.dispose(); view.dispose(); } };
+  return { model, ready: model.ready, dispose() { model.dispose(); view.dispose(); } };
 }

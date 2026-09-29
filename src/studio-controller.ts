@@ -1,10 +1,11 @@
 import * as THREE from 'three';
 import { createStudioRuntime } from './studio-runtime';
+import { calculateFraming, type FramingShot } from './camera-framing';
 import type { PhotographySettings, LightSettings, StudioModel, CharacterSettings, StudioOperation, ImportKind } from './studio-model';
 import type { ViewHost } from './react-view';
 import { Character, CHARACTERS } from './character';
 import { JOINTS, validPose } from './pose-schema';
-import { createDefaultState, validProject } from './project-schema';
+import { createDefaultState, normalizeProjectState, validProject } from './project-schema';
 import { createProjectSession } from './project-session';
 import { createRetouch } from './retouch';
 import { loadPoseLibrary } from './pose-library';
@@ -117,7 +118,15 @@ try {
         announce('已存入拍摄相册');
       },
       onResize: () => { resizeViewport(); poseSaving.update(); },
-      onStateChange: state => { model.setCapture(state); poseSaving.update(); props.refresh(); syncJointControls(); },
+      onStateChange: state => {
+        const previous = model.getSnapshot().capture;
+        model.setCapture(state);
+        if (previous.recording !== state.recording || previous.takeNumber !== state.takeNumber) {
+          poseSaving.update();
+          props.refresh();
+          syncJointControls();
+        }
+      },
       announce,
     });
     const { takePhoto, toggleRecording } = capture;
@@ -152,7 +161,7 @@ try {
       isAvailable: () => project.getSnapshot().ready && !modelLoading && !project.getSnapshot().restoring && !capture.isRecording,
       apply: async preset => {
         rememberState();
-        await restoreState(createShotProject(preset).state);
+        if (!await restoreState(createShotProject(preset).state)) throw new Error('预设未恢复，请检查人物和背景资源');
         announce(`已应用预设“${preset.name}”，可微调或撤销`);
       },
     });
@@ -185,7 +194,6 @@ try {
     syncJointControls();
     controls.addEventListener('start', rememberState);
     lifetime.defer(() => controls.removeEventListener('start', rememberState));
-    window.lucide?.createIcons();
     updateRigVisibility();
     resizeViewport();
     runtime.start();
@@ -198,7 +206,7 @@ try {
       lifetime.signal.throwIfAborted();
       if (saved) {
         if (!validProject(saved, { poses, characters: CHARACTERS, lightDefinitions })) throw new Error('已存配置无效，未覆盖原始数据。');
-        if (!await restoreState(saved.state)) throw new Error('配置中的人偶加载失败，未覆盖已存配置。');
+        if (!await restoreState(saved.state)) throw new Error('配置中的人物或背景加载失败，未覆盖已存配置。');
       }
       lifetime.signal.throwIfAborted();
       project.activate(Boolean(saved));
@@ -250,7 +258,6 @@ try {
       poseCustomized = false;
       poseBrowser.setSelection(saved.id);
       poseSaving.update();
-      window.lucide?.createIcons();
       announce(`${details ? '已另存' : '已保存'}“${saved.name}”到本机姿势库`);
       scheduleConfiguration();
     }
@@ -292,7 +299,7 @@ try {
       onJointChange(star.selected, edited);
     }
 
-    function frameCharacter(mode: string, shot: { direction: Vector3Tuple; offset?: number } | null = null) {
+    function frameCharacter(mode: string, shot: FramingShot | null = null) {
       const bounds = star.getFramingBounds(mode);
       if (!bounds) return;
       if (mode === 'scene') bounds.union(props.getBounds());
@@ -300,29 +307,9 @@ try {
       applyPhotography({ autoOrbit: false });
       controls.enableDamping = false;
       controls.update();
-      const center = bounds.getCenter(new THREE.Vector3());
-      const direction = shot ? new THREE.Vector3(...shot.direction).normalize() : camera.position.clone().sub(controls.target).normalize();
-      if (mode === 'low') {
-        direction.y = -0.16;
-        direction.normalize();
-      }
-      const right = new THREE.Vector3().crossVectors(camera.up, direction).normalize();
-      const up = new THREE.Vector3().crossVectors(direction, right);
-      const verticalSlope = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
-      const horizontalSlope = verticalSlope * camera.aspect;
-      let distance = controls.minDistance;
-      for (const horizontal of [bounds.min.x, bounds.max.x]) {
-        for (const vertical of [bounds.min.y, bounds.max.y]) {
-          for (const depth of [bounds.min.z, bounds.max.z]) {
-            const offset = new THREE.Vector3(horizontal, vertical, depth).sub(center);
-            const clearance = Math.max(Math.abs(offset.dot(right)) / (horizontalSlope * (1 - Math.abs(shot?.offset ?? 0))), Math.abs(offset.dot(up)) / verticalSlope);
-            distance = Math.max(distance, offset.dot(direction) + clearance * 1.12);
-          }
-        }
-      }
-      center.addScaledVector(right, (shot?.offset ?? 0) * distance * horizontalSlope);
-      controls.target.copy(center);
-      camera.position.copy(center).addScaledVector(direction, distance);
+      const frame = calculateFraming({ bounds, camera, target: controls.target, minDistance: controls.minDistance, lowAngle: mode === 'low', shot });
+      controls.target.copy(frame.target);
+      camera.position.copy(frame.position);
       controls.update();
       controls.enableDamping = true;
       const names: Record<string, string> = { full: '全身取景', half: '半身取景', face: '面部特写', low: '低机位仰拍', scene: '人物与全部道具取景' };
@@ -396,26 +383,37 @@ try {
       return project.restore(state);
     }
 
-    async function applyProjectState(state: ProjectState) {
-      if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) return false;
-      if (lifetime.signal.aborted) return false;
-      props.restore(state.props ?? []);
+    async function applyProjectState(input: ProjectState) {
+      const state = normalizeProjectState(input, lightDefinitions);
+      const version = ++backgroundLoadVersion;
+      let texture: THREE.Texture | null;
+      try {
+        texture = await loadBackground(state.background);
+      } catch {
+        if (version === backgroundLoadVersion) announce('背景图片无法解码，项目未恢复');
+        return false;
+      }
+      if (lifetime.signal.aborted || version !== backgroundLoadVersion) { texture?.dispose(); return false; }
+      if (state.character && state.character !== star.id && !await switchCharacter(state.character, false)) { texture?.dispose(); return false; }
+      if (lifetime.signal.aborted || version !== backgroundLoadVersion) { texture?.dispose(); return false; }
+      installBackground(state.background, texture);
+      props.restore(state.props);
       const knownPose = Object.hasOwn(poses, state.pose);
       applyPose(knownPose ? state.pose : poseLibrary.defaultPose);
       studio.material.color.set(state.backdrop);
-      model.setStage({ backdrop: state.backdrop, aspect: Number(state.aspect) });
+      model.setStage({ backdrop: state.backdrop, aspect: state.aspect });
       camera.position.fromArray(state.cameraPosition);
       controls.target.fromArray(state.target);
-      applyPhotography({ focal: Number(state.focal), exposure: Number(state.exposure), dof: Number(state.dof),
-        autoOrbit: state.autoOrbit ?? false, showRigs: state.showRigs ?? false, removeShadows: state.removeShadows ?? true });
-      star.group.rotation.y = THREE.MathUtils.degToRad(Number(state.rotation ?? 0));
+      applyPhotography({ focal: state.focal, exposure: state.exposure, dof: state.dof,
+        autoOrbit: state.autoOrbit, showRigs: state.showRigs, removeShadows: state.removeShadows, lights: state.lights });
+      star.group.rotation.y = THREE.MathUtils.degToRad(state.rotation);
       if (state.jointPose) {
         star.restorePose(state.jointPose);
       } else {
         star.setGrounded(true);
         for (const side of ['left', 'right'] as const) {
           const angles: Vector3Tuple = [...star.poseAngles[`${side}UpperArm`]];
-          angles[2] += THREE.MathUtils.degToRad(Number(state[`${side}Arm`] ?? 0));
+          angles[2] += THREE.MathUtils.degToRad(state[`${side}Arm`]);
           star.setJoint(`${side}UpperArm`, angles);
         }
       }
@@ -424,26 +422,13 @@ try {
       if (state.poseCustomized || !knownPose) onJointChange(star.selected);
       else syncJointControls();
       syncPlacementControls();
-      setBackground(state.background ?? null);
-      const restoredLights = { ...model.getSnapshot().photography.lights };
-      Object.entries(state.lights).forEach(([id, lightState]) => {
-        const definition = lightDefinitions.find((light) => light.id === id);
-        if (!definition) throw new Error('未知灯光配置');
-        restoredLights[definition.id] = {
-          enabled: lightState.enabled, color: lightState.color, intensity: Number(lightState.intensity),
-          position: Number(lightState.position), height: Number(lightState.height ?? definition.position[1]),
-          depth: Number(lightState.depth ?? definition.position[2]),
-        };
-      });
-      applyPhotography({ lights: restoredLights });
       lifetime.frame(resizeViewport);
       return true;
     }
 
     async function resetStudio() {
       rememberState();
-      await restoreState(createDefaultState(poseLibrary.defaultPose, lightDefinitions));
-      announce('摄影棚已重置');
+      if (await restoreState(createDefaultState(poseLibrary.defaultPose, lightDefinitions))) announce('摄影棚已重置');
     }
 
     function announce(message: string) {
@@ -470,30 +455,39 @@ try {
       });
     }
 
-    async function setBackground(data: string | null) {
-      if (lifetime.signal.aborted) return;
-      const version = ++backgroundLoadVersion;
+    function loadBackground(data: string | null) {
+      return data ? new THREE.TextureLoader().loadAsync(data) : Promise.resolve(null);
+    }
+
+    function installBackground(data: string | null, texture: THREE.Texture | null) {
       backgroundData = data;
-      studio.photoBackdrop.visible = false;
       studio.photoBackdrop.material.map?.dispose();
-      studio.photoBackdrop.material.map = null;
+      studio.photoBackdrop.material.map = texture;
       studio.photoBackdrop.material.needsUpdate = true;
-      if (!data) { scheduleConfiguration(); return; }
-      try {
-        const texture = await new THREE.TextureLoader().loadAsync(data);
-        if (lifetime.signal.aborted || version !== backgroundLoadVersion) { texture.dispose(); return; }
+      studio.photoBackdrop.visible = !!texture;
+      if (texture) {
         texture.colorSpace = THREE.SRGBColorSpace;
         const aspect = texture.image.width / texture.image.height;
         studio.photoBackdrop.scale.x = Math.min(1, aspect / (16 / 9));
         studio.photoBackdrop.scale.y = Math.min(1, (16 / 9) / aspect);
-        studio.photoBackdrop.material.map = texture;
-        studio.photoBackdrop.material.needsUpdate = true;
-        studio.photoBackdrop.visible = true;
+      }
+    }
+
+    async function setBackground(data: string | null) {
+      if (lifetime.signal.aborted) return false;
+      const version = ++backgroundLoadVersion;
+      try {
+        const texture = await loadBackground(data);
+        if (lifetime.signal.aborted || version !== backgroundLoadVersion) { texture?.dispose(); return false; }
+        installBackground(data, texture);
         scheduleConfiguration();
+        return true;
       } catch (error) {
-        if (version === backgroundLoadVersion) { backgroundData = null; scheduleConfiguration(); }
-        console.error(error);
-        announce('背景图片无法解码，请选择 PNG、JPEG 或 WebP');
+        if (!lifetime.signal.aborted && version === backgroundLoadVersion) {
+          console.error(error);
+          announce('背景图片无法解码，请选择 PNG、JPEG 或 WebP');
+        }
+        return false;
       }
     }
 
@@ -506,8 +500,7 @@ try {
       reader.addEventListener('load', async () => {
         rememberState();
         if (typeof reader.result !== 'string') return;
-        await setBackground(reader.result);
-        if (backgroundData) announce('背景图片已导入');
+        if (await setBackground(reader.result)) announce('背景图片已导入');
       }, { signal: lifetime.signal });
       reader.addEventListener('error', () => announce('读取背景图片失败'), { signal: lifetime.signal });
       reader.readAsDataURL(file);

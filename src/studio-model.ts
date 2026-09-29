@@ -27,7 +27,7 @@ export interface PhotographySettings {
   removeShadows: boolean;
   lights: Record<LightId, LightSettings>;
 }
-interface StudioSnapshot {
+export interface StudioSnapshot {
   character: CharacterSettings;
   stage: { backdrop: string; aspect: number };
   status: string;
@@ -71,6 +71,7 @@ export function createStudioModel() {
     },
   };
   function update(patch: Partial<StudioSnapshot>) {
+    if (Object.entries(patch).every(([key, value]) => Object.is(Reflect.get(snapshot, key), value))) return;
     snapshot = { ...snapshot, ...patch };
     listeners.forEach(listener => listener());
   }

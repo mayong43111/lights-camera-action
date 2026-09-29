@@ -3,7 +3,9 @@ import { StudioButton } from '../components/StudioControls';
 import { useStudio } from '../studio-context';
 
 export function CaptureBar() {
-  const { state: { retouchBusy, capture, loading, busy }, actions } = useStudio();
+  const { state: capture, actions } = useStudio(state => ({ retouchBusy: state.retouchBusy, loading: state.loading,
+    busy: state.busy, recording: state.capture.recording, stopping: state.capture.stopping, takeNumber: state.capture.takeNumber }));
+  const { retouchBusy, loading, busy } = capture;
   const recordLabel = capture.recording ? '停止录制' : '录制视频';
   return <footer className="capture-bar" aria-label="拍摄控制">
     <div className="take-display" aria-label="当前场次"><span>TAKE</span><strong id="take-number">{String(capture.takeNumber).padStart(2, '0')}</strong></div>

@@ -96,19 +96,20 @@
 ### 6.2 模块边界
 
 - [src/main.tsx](src/main.tsx)、[src/App.tsx](src/App.tsx)：唯一 React 根、主题、认证与启动错误处理；每个应用实例拥有独立的摄影棚模型及 Portal 视图宿主。
-- [src/studio-model.ts](src/studio-model.ts)、[src/studio-context.ts](src/studio-context.ts)：人物关节、布景、镜头灯光、录制、保存、账户及工具选择的共享快照与类型化命令。界面通过 `useSyncExternalStore` 订阅，不读取隐藏输入框、不监听 DOM 属性或派发模拟事件同步业务状态。
-- [src/react-view.tsx](src/react-view.tsx)：将组合、姿势、道具、相册、修图和预览窗口作为 Portal 交给主 React 根。同步挂载/更新仅为现有立即读取 DOM 的功能接口保留，不再创建功能子根或重复包裹主题。
+- [src/studio-model.ts](src/studio-model.ts)、[src/studio-context.ts](src/studio-context.ts)：人物关节、布景、镜头灯光、录制、保存、账户及工具选择的共享快照与类型化命令。界面通过带浅比较缓存的字段选择器订阅；录制时钟独立订阅秒数，不带动工作区与参数面板刷新。不读取隐藏输入框、不监听 DOM 属性或派发模拟事件同步业务状态。
+- [src/react-view.tsx](src/react-view.tsx)：将组合、姿势、道具、相册、修图和预览窗口作为 Portal 交给主 React 根。普通状态更新交由 React 调度；仅挂载与移除保留现有立即读取 DOM 所需的同步边界，不再创建功能子根或重复包裹主题。
 - [src/layout/StudioLayout.tsx](src/layout/StudioLayout.tsx)：工具导航、键盘操作、折叠状态与工作区装配；响应式布局集中在 [src/layout/studio-layout.css](src/layout/studio-layout.css)。
 - [src/layout/StudioHeader.tsx](src/layout/StudioHeader.tsx)、[src/layout/StudioViewport.tsx](src/layout/StudioViewport.tsx)、[src/layout/CaptureBar.tsx](src/layout/CaptureBar.tsx)：项目顶栏、渲染容器与状态、拍摄操作及修图忙碌状态。
 - [src/panels/ScenePanels.tsx](src/panels/ScenePanels.tsx)、[src/panels/CameraPanels.tsx](src/panels/CameraPanels.tsx)：场景与摄影参数视图，保持所有控件 ID 与挂载容器稳定。
 - [src/StudioMarkup.tsx](src/StudioMarkup.tsx)：素材窗口容器与兼容导出；Ant Design 基础控件位于 [src/components/StudioControls.tsx](src/components/StudioControls.tsx)。
-- [src/studio-controller.ts](src/studio-controller.ts)：应用装配、类型化业务命令、领域对象与共享快照的同步，提供项目 v1 状态的捕获/应用回调；恢复时兼容旧数字字符串；接收应用传入的生命周期信号、模型和视图宿主。DOM 查询仅用于视口与功能挂载容器。
+- [src/studio-controller.ts](src/studio-controller.ts)：应用装配、类型化业务命令、领域对象与共享快照的同步，提供项目 v1 状态的捕获/应用回调；接收应用传入的生命周期信号、模型和视图宿主。背景解码成功后才应用项目，期间保持恢复状态；解码失败保留原场景，取消或被替代的加载释放纹理。DOM 查询仅用于视口与功能挂载容器。
+- [src/camera-framing.ts](src/camera-framing.ts)：根据包围盒、相机参数和构图方向计算取景位置与目标，不修改相机或输入几何对象。
 - [src/studio-runtime.ts](src/studio-runtime.ts)：渲染器、相机、轨道控制、环境与后处理、视口尺寸、帧循环和 GPU 资源释放。只接收视口容器及回调，不查询业务控件；角色和道具等功能先释放，再释放运行时。
 - [src/project-session.ts](src/project-session.ts)：项目修改通知、30 步撤销、恢复边界、自动保存及可订阅的保存状态。复用存储客户端的写入队列和版本冲突保护；恢复期间抑制修改通知，成功加载后才启用保存，失败写入保留待保存状态。导航、筛选和未修改数值的操作不触发自动保存。
 - [src/studio-scene.ts](src/studio-scene.ts)：纯场景与灯具工厂，不读取 DOM。
 - [src/studio-defaults.ts](src/studio-defaults.ts)：纯灯光定义，界面与场景共享，不引入 Three.js 渲染模块。
-- [src/capture.ts](src/capture.ts)：拍摄、录制计时、媒体轨道与失败清理；通过回调接入相册并发布拍摄状态，由 React 决定控件锁定与状态显示。
-- [src/scene-types.ts](src/scene-types.ts)、[src/pose-schema.ts](src/pose-schema.ts)、[src/project-schema.ts](src/project-schema.ts)、[src/prop-schema.ts](src/prop-schema.ts)：共享协议、运行时校验与默认状态。
+- [src/capture.ts](src/capture.ts)：拍摄、录制计时、媒体轨道与失败清理；通过回调接入相册并发布拍摄状态，由 React 决定控件锁定与状态显示。计时仅在整数秒变化时通知；姿势与道具刷新只跟随录制切换和拍摄场次变化。
+- [src/scene-types.ts](src/scene-types.ts)、[src/pose-schema.ts](src/pose-schema.ts)、[src/project-schema.ts](src/project-schema.ts)、[src/prop-schema.ts](src/prop-schema.ts)：共享协议、运行时校验与默认状态；项目协议层负责 v1 数字字符串和缺省字段的归一化，不依赖 Three.js。
 - [src/shot-presets.ts](src/shot-presets.ts)、[src/shot-model.ts](src/shot-model.ts)、[src/shot-browser.tsx](src/shot-browser.tsx)：20 组手工组合、授权分析、React 草稿和分类列表；应用与保存均为显式动作。
 - [src/props.tsx](src/props.tsx)：自有道具几何、React 参数视图、TransformControls 变换、数值校验与资源释放。
 - [src/character.ts](src/character.ts)、[src/mannequin.ts](src/mannequin.ts)、[src/pose-ik.ts](src/pose-ik.ts)：VRM 加载与材质适配、白模骨骼映射、FK/IK 和贴地计算；使用第三方 API，不改写第三方库。

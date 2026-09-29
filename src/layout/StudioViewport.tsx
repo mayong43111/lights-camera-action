@@ -2,8 +2,9 @@ import { CaptureBar } from './CaptureBar';
 import { useStudio } from '../studio-context';
 
 export function Viewport() {
-  const { state } = useStudio();
-  const { focal, dof } = state.photography;
+  const { state } = useStudio(state => ({ focal: state.photography.focal, dof: state.photography.dof,
+    resolution: state.resolution, status: state.status, loading: state.loading }));
+  const { focal, dof } = state;
   return (<section className="stage-column" aria-label="3D 摄影棚视口">
       <div className="viewport-surface">
         <div className="viewport-frame" id="viewport-frame">
@@ -15,7 +16,7 @@ export function Viewport() {
           </div>
           <div className="viewport-meta viewport-meta-top"><span>CAM A</span><span id="lens-readout">{Math.round(focal)} MM</span></div>
           <div className="viewport-meta viewport-meta-bottom"><span>LIVE VIEW</span><span id="resolution-readout">{state.resolution}</span></div>
-          <div className="recording-indicator" id="recording-indicator" hidden={!state.capture.recording}><span></span> REC <time id="record-time">{String(Math.floor(state.capture.elapsed / 60)).padStart(2, '0')}:{String(state.capture.elapsed % 60).padStart(2, '0')}</time></div>
+          <RecordingIndicator />
           <div className={`loading-state${state.loading ? '' : ' is-hidden'}`} id="loading-state"><span></span><p>正在点亮摄影棚</p></div>
         </div>
         </div>
@@ -26,4 +27,9 @@ export function Viewport() {
         </div>
         <CaptureBar />
       </section>);
+}
+
+function RecordingIndicator() {
+  const { state } = useStudio(state => ({ recording: state.capture.recording, elapsed: state.capture.elapsed }));
+  return <div className="recording-indicator" id="recording-indicator" hidden={!state.recording}><span></span> REC <time id="record-time">{String(Math.floor(state.elapsed / 60)).padStart(2, '0')}:{String(state.elapsed % 60).padStart(2, '0')}</time></div>;
 }

@@ -5,7 +5,7 @@ import { useStudio } from '../studio-context';
 import { LIGHT_DEFINITIONS } from '../studio-defaults';
 
 export function CameraPanel({ active = 'camera' }: { active?: string } = {}) {
-  const { state, actions } = useStudio();
+  const { state, actions } = useStudio(state => ({ photography: state.photography, ready: state.ready, busy: state.busy }));
   const settings = state.photography;
   const disabled = !state.ready || state.busy;
   const ev = Math.log2(settings.exposure);
@@ -47,7 +47,7 @@ export function CameraPanel({ active = 'camera' }: { active?: string } = {}) {
 }
 
 function LightControls() {
-  const { state, actions } = useStudio();
+  const { state, actions } = useStudio(state => ({ photography: state.photography, ready: state.ready, busy: state.busy }));
   const disabled = !state.ready || state.busy;
   return <div id="light-controls">{LIGHT_DEFINITIONS.map(definition => {
     const light = state.photography.lights[definition.id];

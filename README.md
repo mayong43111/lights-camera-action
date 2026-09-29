@@ -143,11 +143,12 @@ React 界面、认证与存储客户端、场景协议、姿势库和组合预�
 
 | 模块 | 职责与扩展入口 |
 | --- | --- |
+| [src/camera-framing.ts](src/camera-framing.ts) | 无副作用的包围盒取景计算，返回相机位置和目标 |
 | [src/studio-scene.ts](src/studio-scene.ts) | 无影墙、背景平面、位置标记和灯具工厂；灯光定义集中在 `LIGHT_DEFINITIONS` |
 | [src/capture.ts](src/capture.ts) | 拍照、录制及清理；通过 `takePhoto`、`toggleRecording`、`isRecording` 接入，新增输出流程在此扩展 |
 | [src/scene-types.ts](src/scene-types.ts) | 姿势、道具、灯光、场景项目和组合预设的共享类型 |
 | [src/pose-schema.ts](src/pose-schema.ts) | 标准关节和姿势协议，不依赖渲染或界面 |
-| [src/project-schema.ts](src/project-schema.ts) | 项目校验与默认状态；新增保存字段时同时更新这里及入口的捕获/恢复逻辑 |
+| [src/project-schema.ts](src/project-schema.ts) | 项目校验、默认状态与旧版字段归一化；新增保存字段时同时更新这里及控制器的捕获/恢复逻辑 |
 | [src/shot-presets.ts](src/shot-presets.ts) | 预设校验、分类、20 组手工组合与项目配置转换 |
 | [src/shot-model.ts](src/shot-model.ts) | 图片校验、授权分析、草稿和分类库存储、异步请求与失败恢复 |
 | [src/shot-browser.tsx](src/shot-browser.tsx) | React 组合列表、上传授权、草稿编辑与显式预览保存 |
