@@ -22,6 +22,7 @@ namespace Studio
             public bool numericInput;
             public bool selected;
             public bool tile;
+            public bool popup;
         }
 
         [Serializable]
@@ -62,6 +63,21 @@ namespace Studio
             public bool moving;
             public float poseDuration;
             public Vector3 characterPosition;
+            public string page;
+            public string actorInstance;
+            public int actorCount;
+            public int photoFrame;
+            public int studioPoseIndex;
+            public bool studioPosing;
+            public Vector3[] studioJoints;
+            public float orbitYaw;
+            public Vector3 cameraPosition;
+            public float cameraFov;
+            public int studioVertices;
+            public int studioLights;
+            public int visibleOriginalRenderers;
+            public Color backdropColor;
+            public float[] lightIntensities;
             public Rect root;
             public Rect camera;
             public List<ElementState> elements = new List<ElementState>();
@@ -90,6 +106,8 @@ namespace Studio
             var title = root.Q<Label>();
             var effectiveFont = title?.resolvedStyle.unityFontDefinition.fontAsset;
             var mesh = session.avatar.GetComponentInChildren<SkinnedMeshRenderer>();
+            bool inStudio = workbench.PhotoStudio != null && workbench.PhotoStudio.Active;
+            var activeViewport = inStudio ? workbench.PhotoStudio.Viewport : root.Q("character-viewport");
             var state = new WorkbenchState
             {
                 ready = session.Ready, busy = session.Busy, pending = session.HasPendingEdits,
@@ -102,6 +120,21 @@ namespace Studio
                 selectedPose = session.PoseIndex, moving = session.IsMoving,
                 poseDuration = session.PoseIndex < session.poseClips.Length && session.poseClips[session.PoseIndex] != null ? session.poseClips[session.PoseIndex].length : 0,
                 characterPosition = session.avatar.transform.position,
+                page = inStudio ? "studio" : "creator", actorInstance = session.avatar.GetEntityId().ToString(),
+                actorCount = FindObjectsByType<UMA.CharacterSystem.DynamicCharacterAvatar>().Length,
+                photoFrame = inStudio ? workbench.PhotoStudio.Framing : -1,
+                studioPoseIndex = session.StudioPose.PresetIndex, studioPosing = session.StudioPosing,
+                studioJoints = inStudio ? new[] { HumanBodyBones.Head, HumanBodyBones.LeftHand, HumanBodyBones.RightHand,
+                    HumanBodyBones.LeftFoot, HumanBodyBones.RightFoot, HumanBodyBones.LeftUpperLeg, HumanBodyBones.RightUpperLeg,
+                    HumanBodyBones.LeftLowerLeg, HumanBodyBones.RightLowerLeg }
+                    .Select(bone => session.avatar.GetComponentInChildren<Animator>().GetBoneTransform(bone).position).ToArray() : Array.Empty<Vector3>(),
+                orbitYaw = inStudio ? workbench.PhotoStudio.OrbitYaw : 0,
+                cameraPosition = workbench.studioCamera.transform.position, cameraFov = workbench.studioCamera.fieldOfView,
+                studioVertices = inStudio ? workbench.PhotoStudio.Set.SurfaceVertices : 0,
+                studioLights = inStudio ? workbench.PhotoStudio.Set.ActiveLights : 0,
+                visibleOriginalRenderers = inStudio ? workbench.PhotoStudio.Set.VisibleOriginalRenderers : 0,
+                backdropColor = inStudio ? workbench.PhotoStudio.Set.BackgroundColor : Color.clear,
+                lightIntensities = inStudio ? workbench.PhotoStudio.Set.LightIntensities : Array.Empty<float>(),
                 scrollY = root.Q<ScrollView>("parameter-scroll")?.scrollOffset.y ?? 0,
                 boneAnimationEnabled = session.avatar.umaData != null && session.avatar.umaData.BoneAnimatorsEnabled,
                 pose = Hash128.Compute(string.Join(";", session.avatar.GetComponentsInChildren<Transform>()
@@ -109,7 +142,7 @@ namespace Studio
                     string.Join(";", session.avatar.GetComponentsInChildren<SkinnedMeshRenderer>()
                         .Where(renderer => renderer.sharedMesh != null).SelectMany(renderer => Enumerable.Range(0, renderer.sharedMesh.blendShapeCount)
                             .Select(index => renderer.GetBlendShapeWeight(index).ToString("F5"))))).ToString(),
-                viewport = root.Q("character-viewport") != null && IsFinite(root.Q("character-viewport").worldBound) ? root.Q("character-viewport").worldBound : new Rect(),
+                viewport = activeViewport != null && IsFinite(activeViewport.worldBound) ? activeViewport.worldBound : new Rect(),
                 compatibleItems = session.Ready ? session.CompatibleWardrobe().Count() : 0,
                 thumbnailCount = root.Query<Image>().ToList().Count(image => image.image != null || image.sprite != null),
                 definition = session.CanCommit ? session.avatar.GetAvatarDefinitionString(false, false) : "",
@@ -124,9 +157,11 @@ namespace Studio
                 meshBounds = mesh == null ? new Bounds() : mesh.bounds,
                 root = IsFinite(root.worldBound) ? root.worldBound : new Rect(), camera = workbench.studioCamera.rect
             };
-            root.Query<VisualElement>().ForEach(element =>
+            root.panel.visualTree.Query<VisualElement>().ForEach(element =>
             {
-                if (!(element is Button) && !(element is Slider) && !(element is TextElement) && !(element is TextField)) return;
+                if (!(element is Button) && !(element is Slider) && !(element is TextElement) && !(element is TextField) && !(element is DropdownField)) return;
+                for (var parent = element; parent != null; parent = parent.parent)
+                    if (parent.resolvedStyle.display == DisplayStyle.None) return;
                 if (!IsFinite(element.worldBound)) return;
                 var text = element as TextElement;
                 float textWidth = text == null ? 0 : text.MeasureTextSize(text.text, 0, VisualElement.MeasureMode.Undefined,
@@ -135,9 +170,10 @@ namespace Studio
                 {
                     name = element.name, text = text == null ? "" : text.text,
                     bounds = element.worldBound, enabled = element.enabledInHierarchy,
-                    value = element is Slider slider ? slider.value : 0,
+                    value = element is Slider slider ? slider.value : element is DropdownField dropdown ? dropdown.index : 0,
                     numericInput = element is Slider numericSlider && numericSlider.showInputField,
                     selected = element.ClassListContains("selected"), tile = element.ClassListContains("choice-tile"),
+                    popup = !root.Contains(element),
                     textWidth = float.IsFinite(textWidth) ? textWidth : 0
                 });
             });

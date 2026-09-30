@@ -26,7 +26,9 @@ namespace Studio
         public AnimationClip[] poseClips = Array.Empty<AnimationClip>();
         public static readonly string[] PoseNames = { "静止", "放松", "平举", "迈步", "待机", "行走", "跑步" };
         public int PoseIndex { get; private set; }
-        public bool IsMoving => PoseIndex >= 4;
+        public bool IsMoving => PoseIndex >= 4 && !StudioPosing;
+        public bool StudioPosing { get; private set; }
+        public StudioPoseRig StudioPose { get; } = new StudioPoseRig();
 
         public event Action Changed;
         public bool Ready { get; private set; }
@@ -82,6 +84,7 @@ namespace Studio
 
         private void OnDestroy()
         {
+            StudioPose.Dispose();
             if (avatar == null) return;
             avatar.CharacterCreated.RemoveListener(OnGenerated);
             avatar.CharacterUpdated.RemoveListener(OnGenerated);
@@ -156,6 +159,7 @@ namespace Studio
             {
                 data.SetBoneAnimatorsEnabled(false);
                 ApplyPose();
+                if (StudioPosing) StudioPose.Bind(avatar.GetComponentInChildren<Animator>());
                 foreach (var expression in avatar.GetComponentsInChildren<UMA.PoseTools.ExpressionPlayer>())
                     expression.enabled = false;
                 foreach (var expression in avatar.GetComponentsInChildren<DynamicExpressionPlayer>())
@@ -178,9 +182,28 @@ namespace Studio
 
         public void SelectPose(int index)
         {
-            if (!CanCommit || index < 0 || index >= PoseNames.Length || index == PoseIndex ||
+            if (StudioPosing || !CanCommit || index < 0 || index >= PoseNames.Length || index == PoseIndex ||
                 poseController == null || index >= poseClips.Length || poseClips[index] == null) return;
             PoseIndex = index;
+            ApplyPose();
+            Changed?.Invoke();
+        }
+
+        public void BeginStudioPose()
+        {
+            if (!CanCommit || StudioPosing) return;
+            PoseIndex = 0;
+            ApplyPose();
+            StudioPose.Bind(avatar.GetComponentInChildren<Animator>());
+            StudioPosing = true;
+            Changed?.Invoke();
+        }
+
+        public void EndStudioPose()
+        {
+            if (!StudioPosing) return;
+            StudioPose.Release();
+            StudioPosing = false;
             ApplyPose();
             Changed?.Invoke();
         }
@@ -189,6 +212,7 @@ namespace Studio
         {
             foreach (var animator in avatar.GetComponentsInChildren<Animator>())
             {
+                animator.enabled = true;
                 animator.applyRootMotion = false;
                 animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 animator.speed = IsMoving ? 1 : 0;

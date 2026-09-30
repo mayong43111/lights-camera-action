@@ -32,6 +32,7 @@ async function main() {
         await wait((current, frame) => current.frame > frame + 5, before.frame);
     };
     const click = async name => {
+        if (name.startsWith('photo-') || name === 'return-creator') await revealPhoto(name);
         const current = await state();
         const element = current.elements.find(element => element.name === name);
         assert(element?.enabled, `Missing/disabled control ${name}`);
@@ -103,6 +104,33 @@ async function main() {
         assert.equal(after.rotation, before.rotation, 'Pose click rotated character');
         assert.deepEqual(after.characterPosition, before.characterPosition, 'Pose translated character');
         return after;
+    };
+    const revealPhoto = async name => {
+        for (let attempt = 0; attempt < 12; attempt++) {
+            const current = await state();
+            const element = current.elements.find(element => element.name === name);
+            assert(element, `Missing photo control ${name}`);
+            if (element.bounds.y >= 8 && element.bounds.y + element.bounds.height < current.root.height - 8) return;
+            await page.mouse.move(current.viewport.x / 2, current.root.height / 2);
+            await page.mouse.wheel(0, element.bounds.y < 8 ? -160 : 160);
+            await frames();
+        }
+        throw new Error(`Unable to reveal photo control ${name}`);
+    };
+    const photoLayout = current => {
+        assert.equal(current.page, 'studio');
+        assert(current.studioPosing && !current.moving, 'Photography is not static');
+        assert(current.meshInView && current.studioVertices === 38 && current.studioLights === 3, 'Photo scene is incomplete');
+        assert.equal(current.visibleOriginalRenderers, 0, 'Creator environment remains visible');
+        assert.equal(current.viewport.y, 0);
+        assert.equal(current.viewport.height, current.root.height);
+        assert(Math.abs(current.camera.x * current.root.width - current.viewport.x) < 1, 'Photo camera overlaps controls');
+        assert(Math.abs(current.camera.width * current.root.width - current.viewport.width) < 1, 'Photo camera width is stale');
+        assert(!current.elements.some(element => element.name === 'character-name'), 'Hidden creator controls remain visible');
+        for (const element of current.elements.filter(element => element.name.startsWith('photo-'))) {
+            assert(element.bounds.x >= 0 && element.bounds.x + element.bounds.width <= current.viewport.x + 1, `Photo control overflows: ${element.name}`);
+            assert(!element.numericInput, 'Photo slider has numeric input');
+        }
     };
     try {
         await page.goto(process.argv[3] || 'http://127.0.0.1:8520/');
@@ -257,6 +285,156 @@ async function main() {
         await frames();
         assert.equal((await state()).rotation, dragged.rotation, 'Drag did not release');
 
+        const creator = await state();
+        await click('open-studio');
+        const studio = await wait(current => current.page === 'studio' && current.viewport.width > 0);
+        photoLayout(studio);
+        assert.equal(studio.actorInstance, creator.actorInstance, 'Page transition replaced the actor');
+        assert.equal(studio.actorCount, creator.actorCount, 'Page transition duplicated the actor');
+        assert.equal(studio.definition, creator.definition, 'Page transition changed appearance');
+        assert.equal(studio.revision, creator.revision, 'Page transition regenerated the actor');
+        assert.equal(studio.characterName, creator.characterName);
+        assert.equal(studio.selectedPose, creator.selectedPose);
+        for (let index = 0; index < 3; index++)
+            assert(Math.abs(studio.lightIntensities[index] - [4.5, 1.8, 3.5][index]) < 0.001, 'Default lights are too strong');
+        const views = [];
+        for (const framing of [1, 2, 0]) {
+            await click('photo-frame-' + framing);
+            const current = await state();
+            assert.equal(current.photoFrame, framing);
+            assert(current.meshInView && current.elements.find(element => element.name === 'photo-frame-' + framing).selected);
+            views.push(JSON.stringify(current.cameraPosition));
+        }
+        assert.equal(new Set(views).size, 3, 'Framing choices do not move the camera');
+        await revealPhoto('photo-lens');
+        const lensBox = (await state()).elements.find(element => element.name === 'photo-lens').bounds;
+        await page.mouse.click(lensBox.x + lensBox.width * 0.8, lensBox.y + lensBox.height - 15, { delay: 180 });
+        await frames();
+        assert((await state()).cameraFov > 50, 'Lens slider did not change field of view');
+        const beforeOrbit = await state();
+        const photoCenter = { x: beforeOrbit.viewport.x + beforeOrbit.viewport.width / 2, y: beforeOrbit.viewport.height / 2 };
+        await page.mouse.move(photoCenter.x, photoCenter.y);
+        await page.mouse.down();
+        await page.mouse.move(photoCenter.x + 100, photoCenter.y + 30, { steps: 15 });
+        await page.mouse.up();
+        await frames();
+        const orbited = await state();
+        assert(Math.abs(orbited.orbitYaw) > 20, 'Photo orbit failed');
+        assert.notDeepEqual(orbited.cameraPosition, beforeOrbit.cameraPosition);
+        assert.equal(orbited.rotation, creator.rotation, 'Photo orbit rotated the actor');
+        assert.deepEqual(orbited.characterPosition, creator.characterPosition);
+        await page.mouse.move(photoCenter.x + 130, photoCenter.y + 30);
+        await frames();
+        assert.equal((await state()).orbitYaw, orbited.orbitYaw, 'Photo orbit did not release');
+        await page.mouse.wheel(0, 180);
+        await frames();
+        assert.notDeepEqual((await state()).cameraPosition, orbited.cameraPosition, 'Photo zoom failed');
+        for (let index = 0; index < 3; index++) {
+            await revealPhoto('photo-light-' + index);
+            const box = (await state()).elements.find(element => element.name === 'photo-light-' + index).bounds;
+            await page.mouse.click(box.x + box.width * 0.7, box.y + box.height - 15, { delay: 180 });
+            await frames();
+            assert((await state()).lightIntensities[index] > 5.5 && (await state()).lightIntensities[index] <= 10, `Light ${index} intensity is outside the soft range`);
+        }
+        await revealPhoto('photo-backdrop-2');
+        await click('photo-backdrop-2');
+        const lit = await state();
+        assert(lit.backdropColor.g > lit.backdropColor.r && lit.backdropColor.g > lit.backdropColor.b, 'Backdrop material did not change');
+        assert(lit.elements.find(element => element.name === 'photo-backdrop-2').selected);
+        await revealPhoto('photo-reset-camera');
+        await click('photo-reset-camera');
+        assert.equal((await state()).orbitYaw, 0);
+        assert.equal((await state()).cameraFov, 40);
+        await revealPhoto('photo-pose');
+        const selectPhotoOption = async (name, index) => {
+            await revealPhoto(name);
+            const current = await state();
+            const box = current.elements.find(element => element.name === name).bounds;
+            const value = current.elements.find(element => element.text && element.bounds.x > box.x &&
+                element.bounds.y > box.y + box.height / 2 && element.bounds.y + element.bounds.height < box.y + box.height);
+            assert(value, `Dropdown value missing: ${name}`);
+            await page.mouse.click(value.bounds.x + value.bounds.width / 2, value.bounds.y + value.bounds.height / 2, { delay: 180 });
+            await frames();
+            const count = name === 'photo-pose' ? 8 : 6;
+            const options = (await state()).elements.filter(element => element.popup && element.text && element.bounds.height > 0);
+            assert.equal(options.length, count, `Popup menu options missing: ${name}`);
+            const option = options[index].bounds;
+            await page.mouse.click(option.x + option.width / 2, option.y + option.height / 2, { delay: 180 });
+            await frames();
+        };
+        const staticPoses = new Set();
+        for (let index = 0; index < 8; index++) {
+            await selectPhotoOption('photo-pose', index);
+            const posed = await wait((current, index) => current.studioPoseIndex === index, index);
+            assert(!posed.moving && posed.studioPosing && posed.meshInView);
+            assert.equal(posed.definition, creator.definition, 'Preset changed appearance');
+            assert.deepEqual(posed.characterPosition, creator.characterPosition, 'Preset moved actor root');
+            await wait((current, frame) => current.frame > frame + 45, posed.frame);
+            assert.equal((await state()).pose, posed.pose, `Studio preset ${index} is not static`);
+            staticPoses.add(posed.pose);
+            const joints = posed.studioJoints;
+            if (index === 1) assert(joints[1].y < joints[0].y - 0.3 && joints[2].y < joints[0].y - 0.3, 'Mountain hands are not lowered');
+            if (index === 2) assert(joints[1].y > joints[0].y && joints[2].y > joints[0].y, 'Salute hands are not raised');
+            if (index === 5) assert(joints[3].y > joints[4].y + 0.2, 'Tree pose did not raise left foot');
+            console.log(JSON.stringify({ staticStudioPose: index, head: joints[0].y, hands: [joints[1].y, joints[2].y], feet: [joints[3].y, joints[4].y] }));
+        }
+        assert.equal(staticPoses.size, 8, 'Studio presets are not distinct');
+        await selectPhotoOption('photo-pose', 5);
+        const tree = await state();
+        await click('photo-mirror');
+        const mirrored = await state();
+        assert(mirrored.studioJoints[4].y > mirrored.studioJoints[3].y + 0.2, 'Mirror did not swap raised foot');
+        await click('photo-mirror');
+        assert.equal((await state()).pose, tree.pose, 'Double mirror did not restore pose');
+        for (const [group, channel] of [[0, 0], [1, 3], [2, 6], [3, 13], [4, 20], [5, 26]]) {
+            await selectPhotoOption('photo-pose-part', group);
+            await revealPhoto('photo-muscle-' + channel);
+            const before = await state();
+            const box = before.elements.find(element => element.name === 'photo-muscle-' + channel).bounds;
+            await page.mouse.click(box.x + box.width * 0.62, box.y + box.height - 15, { delay: 180 });
+            await frames();
+            const adjusted = await state();
+            assert.notEqual(adjusted.pose, before.pose, `Pose group ${group} slider did not change bones`);
+            assert.equal(adjusted.definition, creator.definition);
+        }
+        await click('photo-reset-pose');
+        assert.equal((await state()).pose, tree.pose, 'Reset did not restore selected preset');
+        await selectPhotoOption('photo-pose-part', 0);
+        await revealPhoto('photo-muscle-0');
+        const muscle = (await state()).elements.find(element => element.name === 'photo-muscle-0').bounds;
+        await page.mouse.click(muscle.x + muscle.width * 0.6, muscle.y + muscle.height - 15, { delay: 180 });
+        await frames();
+        const editedPose = await state();
+        assert.equal((await state()).definition, creator.definition, 'Photo controls changed appearance');
+        await revealPhoto('return-creator');
+        await click('return-creator');
+        const returned = await wait(current => current.page === 'creator');
+        assert.equal(returned.definition, creator.definition);
+        assert.equal(returned.actorInstance, creator.actorInstance);
+        assert.equal(returned.revision, creator.revision);
+        assert.equal(returned.panelRevision, creator.panelRevision, 'Returning rebuilt the creator panel');
+        assert.equal(returned.scrollY, creator.scrollY, 'Returning reset creator scroll');
+        assert.equal(returned.cameraFov, creator.cameraFov, 'Creator lens was not restored');
+        assert(returned.meshInView, 'Returning hid the actor');
+        assert.equal(returned.moving, false, 'Returning resumed motion');
+        await choosePose(0);
+        await click('open-studio');
+        photoLayout(await state());
+        assert.equal((await state()).pose, editedPose.pose, 'Reentry lost custom static pose');
+        assert.deepEqual((await state()).lightIntensities, lit.lightIntensities, 'Reentry lost lighting');
+        assert.deepEqual((await state()).backdropColor, lit.backdropColor, 'Reentry lost backdrop');
+        await page.setViewportSize({ width: 390, height: 844 });
+        await wait(current => current.root.width === 390);
+        await frames();
+        photoLayout(await state());
+        for (const name of ['photo-frame-2', 'photo-backdrop-1', 'photo-light-2', 'return-creator']) {
+            await revealPhoto(name);
+            if (name !== 'photo-light-2') await click(name);
+        }
+        assert.equal((await state()).page, 'creator');
+        assert.equal((await state()).definition, creator.definition);
+        console.log(JSON.stringify({ photography: { sharedActor: studio.actorInstance, vertices: studio.studioVertices, lights: lit.lightIntensities, desktopAndNarrow: true } }));
+
         await page.setViewportSize({ width: 390, height: 844 });
         await wait(current => current.root.width === 390);
         await click('category-2');
@@ -271,7 +449,7 @@ async function main() {
         assert(narrow.elements.some(element => element.name.startsWith('dna-')), 'No narrow DNA controls');
         console.log(JSON.stringify({ narrowViewport: narrow.viewport, errors, warnings }));
         assert.equal(errors.length, 0, 'Browser errors occurred');
-        console.log('PASS: seven poses, fixed holds, motion loops, in-place motion, rebuild persistence, desktop/narrow pose layout, appearance and editing regressions.');
+        console.log('PASS: eight static studio presets, six joint groups, mirror/reset/reentry, soft lights, framing/orbit/zoom/lens, desktop/narrow layout, and all creator regressions.');
     } finally {
         console.log(JSON.stringify({ finalErrors: errors, finalWarnings: warnings, ignored }));
         await browser.close();

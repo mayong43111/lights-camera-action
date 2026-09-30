@@ -16,6 +16,10 @@ namespace Studio
         public Camera studioCamera;
         public FontAsset chineseFont;
         public StyleSheet styleSheet;
+        public Material photoBackdropMaterial;
+        public PhotoStudioPage PhotoStudio { get; private set; }
+        private VisualElement creatorWorkspace;
+        private Button enterStudio;
 
         private VisualElement root;
         private VisualElement viewport;
@@ -94,9 +98,11 @@ namespace Studio
             root.styleSheets.Add(styleSheet);
             root.style.unityFontDefinition = FontDefinition.FromSDFFont(chineseFont);
             var workspace = Add(root, "workspace");
+            creatorWorkspace = workspace;
             var panel = Add(workspace, "parameter-panel");
             var heading = Add(panel, "section-heading");
             heading.Add(new Label("创建角色"));
+            enterStudio = Command(heading, "摄影棚", "进入摄影棚", OpenStudio, "open-studio");
             characterName = new TextField { value = session.CharacterName, maxLength = 40, name = "character-name" };
             characterName.tooltip = "角色名称";
             characterName.AddToClassList("character-name");
@@ -169,7 +175,24 @@ namespace Studio
             root.RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             viewport.RegisterCallback<GeometryChangedEvent>(change => ResizeCamera());
             session.Changed += Refresh;
+            PhotoStudio = new PhotoStudioPage(session, studioCamera, photoBackdropMaterial, CloseStudio);
+            root.Add(PhotoStudio.View);
             Refresh();
+        }
+
+        private void OpenStudio()
+        {
+            if (!session.CanCommit) return;
+            if (dragPointer >= 0) EndDrag(dragPointer);
+            PhotoStudio.Enter();
+            creatorWorkspace.style.display = DisplayStyle.None;
+        }
+
+        private void CloseStudio()
+        {
+            PhotoStudio.Exit();
+            creatorWorkspace.style.display = DisplayStyle.Flex;
+            ResizeCamera();
         }
 
         private void EndDrag(int pointer)
@@ -181,6 +204,7 @@ namespace Studio
 
         private void OnDisable()
         {
+            PhotoStudio?.Dispose();
             if (session != null) session.Changed -= Refresh;
             if (skinRamp != null) Destroy(skinRamp);
         }
@@ -193,6 +217,7 @@ namespace Studio
 
         private void ResizeCamera()
         {
+            if (PhotoStudio != null && PhotoStudio.Active) { PhotoStudio.ResizeCamera(); return; }
             if (studioCamera == null || root.resolvedStyle.width <= 0 || root.resolvedStyle.height <= 0) return;
             Rect bounds = viewport.worldBound;
             studioCamera.rect = new Rect(bounds.x / root.resolvedStyle.width,
@@ -203,6 +228,7 @@ namespace Studio
 
         private void FrameCharacter()
         {
+            if (PhotoStudio != null && PhotoStudio.Active) return;
             if (!session.Ready || studioCamera == null || studioCamera.aspect <= 0) return;
             var renderer = session.avatar.GetComponentInChildren<SkinnedMeshRenderer>();
             if (renderer == null) return;
@@ -219,6 +245,8 @@ namespace Studio
 
         private void Refresh()
         {
+            enterStudio.SetEnabled(session.CanCommit);
+            PhotoStudio?.Refresh();
             status.text = session.Status;
             status.EnableInClassList("busy", session.Busy || session.HasPendingEdits);
             save.SetEnabled(session.CanCommit);

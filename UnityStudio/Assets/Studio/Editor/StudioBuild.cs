@@ -169,6 +169,22 @@ namespace Studio.Editor
             workbench.studioCamera = Camera.main;
             workbench.chineseFont = fontAsset;
             workbench.styleSheet = AssetDatabase.LoadAssetAtPath<StyleSheet>("Assets/Studio/UI/Workbench.uss");
+            const string backdropPath = "Assets/Studio/Settings/PhotoBackdrop.mat";
+            var backdrop = AssetDatabase.LoadAssetAtPath<Material>(backdropPath);
+            if (backdrop == null)
+            {
+                var shader = Shader.Find("Universal Render Pipeline/Lit");
+                if (shader == null || ShaderUtil.ShaderHasError(shader)) throw new InvalidOperationException("Photo backdrop shader is unavailable.");
+                backdrop = new Material(shader);
+                backdrop.SetFloat("_Smoothness", 0.2f);
+                AssetDatabase.CreateAsset(backdrop, backdropPath);
+            }
+            workbench.photoBackdropMaterial = backdrop;
+            var pipeline = AssetDatabase.LoadAssetAtPath<UniversalRenderPipelineAsset>(PipelinePath);
+            if (pipeline == null) throw new InvalidOperationException("Studio render pipeline is missing.");
+            var pipelineSettings = new SerializedObject(pipeline);
+            pipelineSettings.FindProperty("m_AdditionalLightShadowsSupported").boolValue = true;
+            pipelineSettings.ApplyModifiedPropertiesWithoutUndo();
             if (workbench.studioCamera == null || workbench.styleSheet == null)
                 throw new InvalidOperationException("Workbench camera or style sheet is missing.");
             sample.enabled = false;
@@ -248,7 +264,9 @@ namespace Studio.Editor
                     if (color.r < color.g || color.g < color.b || color.a != 1)
                         throw new InvalidOperationException("Skin ramp contains an unexpected color.");
                 }
-                Debug.Log("[StudioValidation] PASS: valid/missing bone chains, configuration isolation, 101 natural skin samples.");
+                if (StudioPoseRig.Channels.Length != StudioPoseRig.Labels.Length || StudioPoseRig.Channels.Any(name => !HumanTrait.MuscleName.Contains(name)))
+                    throw new InvalidOperationException("Invalid studio pose muscle mapping.");
+                Debug.Log("[StudioValidation] PASS: valid/missing bone chains, configuration isolation, 101 natural skin samples, studio Humanoid muscle mapping.");
             }
             finally
             {
