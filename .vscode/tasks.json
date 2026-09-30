@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Unity: Check Environment",
+			"type": "shell",
+			"command": "${workspaceFolder}/scripts/Test-UnityEnvironment.ps1",
+			"problemMatcher": []
+		},
+		{
+			"label": "Unity: Validate Project (CLI)",
+			"type": "shell",
+			"command": "${workspaceFolder}/scripts/Open-UnityStudio.ps1",
+			"problemMatcher": []
+		}
+	]
+}

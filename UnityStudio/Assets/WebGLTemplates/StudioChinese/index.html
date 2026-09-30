@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>创建角色</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; color: #e1e6e6; background: #1b1f21; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    #unity-app { height: 100%; height: 100dvh; display: flex; flex-direction: column; }
+    #stage { position: relative; flex: 1; min-height: 0; }
+    #unity-canvas { display: block; width: 100%; height: 100%; outline: none; }
+    #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; background: #222729; }
+    #loading[hidden] { display: none; }
+    #loading h1 { font-size: 28px; font-weight: 500; margin: 0 0 24px; }
+    progress { width: min(280px, 70vw); height: 6px; accent-color: #70cfb8; }
+    #loading-text { font-size: 14px; color: #b8c8c4; margin-top: 14px; }
+    #error { position: absolute; top: 16px; left: 16px; right: 16px; padding: 12px; background: #6b302f; line-height: 1.6; }
+    #error[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <main id="unity-app">
+    <div id="stage">
+      <canvas id="unity-canvas" tabindex="0" aria-label="人物创建工作台"></canvas>
+      <div id="loading" role="status">
+        <h1>创建角色</h1>
+        <progress id="progress" max="1" value="0" aria-label="人物工作台加载进度"></progress>
+        <span id="loading-text">正在加载人物工作台…</span>
+      </div>
+      <div id="error" role="alert" hidden></div>
+    </div>
+  </main>
+  <script>
+    const canvas = document.getElementById("unity-canvas");
+    const loading = document.getElementById("loading");
+    const error = document.getElementById("error");
+    function showFailure(message) {
+      console.error(message);
+      error.textContent = "人物工作台加载失败，请重新加载页面。";
+      error.hidden = false;
+      loading.hidden = true;
+    }
+    const config = {
+      arguments: [],
+      dataUrl: "Build/{{{ DATA_FILENAME }}}",
+      frameworkUrl: "Build/{{{ FRAMEWORK_FILENAME }}}",
+      codeUrl: "Build/{{{ CODE_FILENAME }}}",
+      streamingAssetsUrl: "StreamingAssets",
+      companyName: "{{{ COMPANY_NAME }}}",
+      productName: "{{{ PRODUCT_NAME }}}",
+      productVersion: "{{{ PRODUCT_VERSION }}}",
+      fullscreenElementID: "unity-app",
+      autoSyncPersistentDataPath: true,
+      devicePixelRatio: 1,
+      showBanner: (message, type) => type === "error" ? showFailure(message) : console.warn(message)
+    };
+    const loader = document.createElement("script");
+    loader.src = "Build/{{{ LOADER_FILENAME }}}";
+    loader.onerror = () => showFailure("Unity loader could not be downloaded.");
+    loader.onload = () => createUnityInstance(canvas, config, progress => {
+      document.getElementById("progress").value = progress;
+      document.getElementById("loading-text").textContent = "正在加载人物工作台… " + Math.round(progress * 100) + "%";
+    }).then(instance => {
+      window.unityInstance = instance;
+      window.studioRuntimeReady = true;
+      loading.hidden = true;
+    }).catch(showFailure);
+    document.body.appendChild(loader);
+  </script>
+</body>
+</html>
